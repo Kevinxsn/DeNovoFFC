@@ -17,6 +17,7 @@
 #include "denovo/ffc.hpp"
 #include "denovo/lines.hpp"
 #include "denovo/masterset.hpp"
+#include "denovo/dag.hpp"
 
 namespace denovo {
 
@@ -85,6 +86,10 @@ struct Result {
     std::vector<LineInfo> lines;
     std::vector<Entry>    master;
     std::vector<std::string> reconstructions;
+    //: The same paths as node (x1, x2) sequences.  Only the benchmark scorer
+    //: needs these -- it re-derives each path's implied breakpoints to ask
+    //: whether they all sit on a real residue boundary.
+    std::vector<Path> paths_raw;
     int    n_paths = 0;
     int    rounds = 0;
     double best_weight = -1.0;

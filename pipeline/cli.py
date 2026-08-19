@@ -26,7 +26,7 @@ import traceback
 
 import pandas as pd
 
-from . import annotate, denovo, deconvolve, paths, prep
+from . import annotate, bench, denovo, deconvolve, paths, prep
 
 TERMINI = ("H2O", "OH", "NH3", "NH2")
 FRAGMENTATION = ("HCD", "ETD", "ETHCD")
@@ -276,6 +276,28 @@ def _print_annotation(rec, top_list) -> None:
             print(f"      -> {s['reconstruction']}")
 
 
+# ── benchmark ───────────────────────────────────────────────────────────────
+def cmd_bench(args) -> int:
+    print(f"=== DeNovoMMS benchmark: {args.set} set, "
+          f"top-N {args.top_list or denovo.DEFAULT_TOP_LIST} ===")
+    df = bench.run(names=args.only, which=args.set, top_list=args.top_list,
+                   engine=args.engine, output_dir=args.output,
+                   detail=not args.no_detail, verbose=args.verbose)
+    if df.empty:
+        print("nothing ran -- is the benchmark data present?")
+        return 1
+    cols = [c for c in df.columns if c != "reconstruction"]
+    print()
+    print(df[cols].to_string(index=False))
+    print()
+    print(bench.summarise(df))
+    print()
+    for _, r in df[df["top_n"] == df["top_n"].max()].iterrows():
+        print(f"  {r['peptide']:<12} {r['reconstruction']}")
+    print(f"\n  wrote {os.path.abspath(args.output)}")
+    return 0
+
+
 # ── info ────────────────────────────────────────────────────────────────────
 def cmd_info(args) -> int:
     print(f"DeNovoMMS  root {paths.ROOT}")
@@ -361,6 +383,27 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--graph", action="store_true",
                    help="annotation: render the 2D reconstruction map")
     r.set_defaults(func=cmd_run)
+
+    b = sub.add_parser(
+        "bench", help="run the benchmark peptides and score them",
+        description="Run the reference peptides end to end and grade each "
+                    "answer against its known sequence.  ⚠ The only place a "
+                    "ground-truth sequence enters the de novo route, and it "
+                    "enters strictly AFTER a result exists.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    b.add_argument("--set", choices=("main", "etd", "all"), default="main",
+                   help="main = the 7 HCD peptides; etd = the 7 ETD/EThcD "
+                        "datasets; all = both")
+    b.add_argument("--only", nargs="+", metavar="NAME",
+                   help="just these, e.g. --only VEA3+ KWK5+")
+    b.add_argument("--top-list", type=int, nargs="+",
+                   help="top-N cutoffs [200 500]")
+    b.add_argument("--engine", choices=("auto", "cpp", "python"), default="auto")
+    b.add_argument("--output", "-o", default="result/benchmark")
+    b.add_argument("--no-detail", action="store_true",
+                   help="skip the per-run .xlsx workbooks")
+    b.add_argument("--verbose", "-v", action="store_true")
+    b.set_defaults(func=cmd_bench)
 
     i = sub.add_parser("info", help="what this install can see")
     i.set_defaults(func=cmd_info)

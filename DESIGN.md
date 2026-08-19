@@ -614,9 +614,24 @@ cpp/build.sh                      # once
 ```
 
 ```bash
+./denovomms bench                 # the 7 reference peptides, scored
+./denovomms bench --set etd
+
 $PY tests/parity.py               # C++ vs Python, every reported quantity
 $PY tests/parity.py --etd
 tests/smoke.sh                    # every route, end to end, on real data
 ```
+
+`bench` reproduces `denovo.md` §5 and §9d exactly — 7/7 correct at top200 and
+top500, coverage 68.5 % / 71.1 %, 0 / 1 wrong coordinates, 98 / 107 of 188
+residues resolved, and every reconstruction string identical; 6/7 across the
+two cutoffs on the ETD set. That is the end-to-end check that the transfer plus
+the C++ port changed nothing.
+
+⚠ `pipeline/bench.py` is the **only** place a ground-truth sequence enters the
+de novo route, and it enters strictly *after* a result exists — `denovo_core`
+never imports `evaluate`, and the C++ engine cannot. It grades both engines
+through the *same* `evaluate.score_result`, via a duck-typed adapter over the
+JSON, so a scoring difference can never be mistaken for an engine difference.
 
 README.md has the operational detail.

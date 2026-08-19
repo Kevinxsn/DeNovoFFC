@@ -526,6 +526,7 @@ Result run_denovo(const FfcTable& t, int parent_charge, double parent_mass,
         for (const Path& pth : raw)
             res.reconstructions.push_back(
                 format_gapped(pth, total, term, merge_tol, p.label_tol));
+        res.paths_raw = raw;
     }
 
     res.master = work.entries();

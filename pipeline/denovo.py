@@ -117,8 +117,10 @@ def run_python(merged_df: pd.DataFrame, *, parent_charge: int,
         "n_lines": len(res.lines),
         "reconstructions": [r["reconstruction"] for r in res.reconstructions],
         "master_set": [dict(coord=e.coord, sigma=e.sigma, n=e.n,
-                            best_rank=e.best_rank, origins=e.origins)
+                            best_rank=e.best_rank, kinds=e.kinds,
+                            origins=e.origins)
                        for e in res.master.entries],
+        "paths": [[list(node) for node in path] for path in res.paths_raw],
         "lines": [dict(key=li.key, i=li.i, j=li.j, mass=li.mass,
                        a_shift=li.a_shift, category=li.category,
                        detail=li.detail, n_ffc=li.n_ffc,

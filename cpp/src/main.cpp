@@ -218,12 +218,25 @@ int main(int argc, char** argv) {
                   << ", \"sigma\": " << e.sigma
                   << ", \"n\": " << e.n
                   << ", \"best_rank\": " << e.best_rank
-                  << ", \"origins\": [";
+                  << ", \"kinds\": [";
+                for (size_t q = 0; q < e.kinds.size(); ++q)
+                    o << (q ? ", " : "") << '"' << json_escape(e.kinds[q]) << '"';
+                o << "], \"origins\": [";
                 for (size_t q = 0; q < e.origins.size(); ++q)
                     o << (q ? ", " : "") << '"' << json_escape(e.origins[q]) << '"';
                 o << "]}";
             }
-            o << "\n  ],\n  \"lines\": [";
+            // Node sequences of the tied paths, for the benchmark scorer.
+            o << "\n  ],\n  \"paths\": [";
+            for (size_t k = 0; k < r.paths_raw.size(); ++k) {
+                o << (k ? ", [" : "[");
+                const auto& nodes = r.paths_raw[k].nodes;
+                for (size_t q = 0; q < nodes.size(); ++q)
+                    o << (q ? ", [" : "[") << std::setprecision(6)
+                      << nodes[q].first << ", " << nodes[q].second << "]";
+                o << "]";
+            }
+            o << "],\n  \"lines\": [";
             for (size_t k = 0; k < r.lines.size(); ++k) {
                 const LineInfo& li = r.lines[k];
                 o << (k ? ",\n    " : "\n    ")

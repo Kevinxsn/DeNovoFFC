@@ -234,6 +234,38 @@ error. **When the reconstruction is wrong, read that number first.**
 
 ---
 
+## The benchmark
+
+Seven reference peptides, run end to end and graded against their known
+sequences:
+
+```bash
+./denovomms bench                        # the 7 HCD peptides, top200 + top500
+./denovomms bench --set etd              # the 7 ETD / EThcD datasets
+./denovomms bench --set all              # both
+./denovomms bench --only KWK5+ LL6+ -v   # a subset, with per-run detail
+./denovomms bench --top-list 500         # one cutoff
+./denovomms bench --engine python        # the reference engine instead
+```
+
+Takes ~20 s for all seven (about 4 s of that in the engine; the rest is
+loading and merging the tables). Prints a per-run table, the totals, and each
+peptide's reconstruction, and writes `result/benchmark/benchmark.csv` plus a
+per-run `.xlsx`.
+
+```
+  top200: 7/7 correct   mean coverage 68.5%   wrong coordinates 0   residues resolved 98/188
+  top500: 7/7 correct   mean coverage 71.1%   wrong coordinates 1   residues resolved 107/188
+```
+
+⚠ This is the **only** place a ground-truth sequence enters the de novo route,
+and it enters strictly *after* a result exists. `--set etd` reports 5/7 per
+cutoff and 6/7 across the two — line detection is non-monotonic in top-N, so a
+peptide can be right at one cutoff and wrong at another without either being a
+regression.
+
+The benchmark needs the reference data under `/home/sux002/data`.
+
 ## Tests
 
 ```bash
