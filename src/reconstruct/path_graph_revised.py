@@ -1,0 +1,662 @@
+"""
+path_graph_revised.py — Extended visualization for the 2D fragment-
+correlation spectrum graph.
+
+This is a drop-in variant of ``path_graph.visualize_all_paths`` that adds
+one feature: **ion annotation on the axis ticks**.
+
+For every value on the x/y axis that is *not* spurious, the tick label is
+annotated with the corresponding b/y ion name (e.g. ``"398.20  b4"``),
+right beside the mass value. Spurious values keep the original red/bold
+styling from ``path_graph.py`` and are left un-annotated (a spurious peak
+isn't a real ion, so there's nothing to label).
+
+The ion identity for each mass is supplied by the caller via the
+``ion_labels`` dict: ``{mass_value: "b4", ...}``. See
+``path_finding.py`` for how this dict is built from the peptide object.
+"""
+
+import os
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+import numpy as np
+
+
+_PALETTE = {
+    # Background & structure
+    "bg":             "#FFFFFF",
+    "grid_clean":     "#E8EAF0",
+    "grid_spurious":  "#F5DADA",
+    "tick_clean":     "#4A5068",
+    "tick_spurious":  "#C03030",
+    "tick_ion":       "#1565C0",
+
+    # Nodes
+    "node_clean":     "#B0BED8",
+    "node_spurious":  "#E8BFBF",
+
+    # Correct path (hero)
+    "hero_line":      "#00946B",
+    "hero_glow":      "#00C88E",
+    "hero_marker":    "#FFFFFF",
+    "hero_box_bg":    "#E6F7F1",
+    "hero_box_ec":    "#00946B",
+    "hero_text":      "#006648",
+
+    # Candidate paths
+    "cand_line":      "#6C5FD0",
+    "cand_marker":    "#FFFFFF",
+    "cand_box_bg":    "#EEEAFC",
+    "cand_box_ec":    "#6C5FD0",
+    "cand_text":      "#4A3FA0",
+
+    # Start / End markers
+    "start_fill":     "#E83050",
+    "start_edge":     "#B02040",
+    "end_fill":       "#F0A010",
+    "end_edge":       "#C08000",
+
+    # Residual box
+    "res_box_bg":     "#FFF8E8",
+    "res_box_ec":     "#E09000",
+    "res_text":       "#8B5E00",
+
+    # Accents
+    "title":          "#1A1E2E",
+    "label":          "#5A6078",
+    "legend_bg":      "#F6F7FA",
+    "legend_ec":      "#D0D4E0",
+    "legend_text":    "#3A4060",
+    "spine":          "#C8CCD8",
+}
+
+
+def _stagger_tick_labels(ax, axis='x', min_gap_pt=10):
+    """
+    Detect overlapping tick labels, hide the originals, and replace them
+    with annotated labels connected by thin leader lines back to the
+    actual tick position on the axis.
+
+    This completely eliminates overlap by placing shifted labels at
+    guaranteed-clear positions with visible connection lines.
+
+    min_gap_pt: minimum gap in points between label bounding boxes
+                before staggering kicks in.
+    """
+    fig = ax.get_figure()
+    renderer = fig.canvas.get_renderer()
+
+    if axis == 'x':
+        tick_objs = ax.xaxis.get_major_ticks()
+        labels = [t.label2 for t in tick_objs]  # label2 = top
+    else:
+        tick_objs = ax.yaxis.get_major_ticks()
+        labels = [t.label1 for t in tick_objs]  # label1 = left
+
+    tick_positions = [t.get_loc() for t in tick_objs]
+
+    # Get bounding boxes in display coords
+    bboxes = []
+    for lbl in labels:
+        if lbl.get_text():
+            try:
+                bb = lbl.get_window_extent(renderer)
+                bboxes.append(bb)
+            except Exception:
+                bboxes.append(None)
+        else:
+            bboxes.append(None)
+
+    n = len(bboxes)
+    if n < 2:
+        return
+
+    # Find crowded clusters
+    overlaps_prev = [False] * n
+    for i in range(1, n):
+        if bboxes[i] is None or bboxes[i - 1] is None:
+            continue
+        prev, curr = bboxes[i - 1], bboxes[i]
+        if axis == 'x':
+            gap = curr.x0 - prev.x1
+        else:
+            gap = prev.y0 - curr.y1
+        if gap < min_gap_pt:
+            overlaps_prev[i] = True
+
+    # Assign tier levels within each crowded run
+    tier = [0] * n
+    in_run = False
+    run_counter = 0
+    for i in range(n):
+        if overlaps_prev[i]:
+            if not in_run:
+                in_run = True
+                run_counter = 1
+            else:
+                run_counter += 1
+            tier[i] = run_counter
+        else:
+            in_run = False
+            run_counter = 0
+            tier[i] = 0
+
+    # ── Leader line style ──
+    leader_style = dict(
+        arrowstyle='-',
+        color='#9098B0',
+        lw=0.8,
+        shrinkA=0,
+        shrinkB=1,
+    )
+
+    # ── Offset magnitudes per tier level ──
+    # Direction is computed contextually below: each shifted label moves
+    # AWAY from the cluster's anchor (tier-0) label, so the leader line
+    # never crosses over another label.
+    if axis == 'x':
+        # (|dx|, dy) — horizontal magnitude + vertical lift per level
+        tier_magnitudes = [
+            (0, 0),
+            (18, 18),      # level 1
+            (30, 32),      # level 2
+            (42, 46),      # level 3
+            (54, 60),      # level 4
+        ]
+    else:
+        # (dx, |dy|) — leftward push + vertical magnitude per level
+        tier_magnitudes = [
+            (0, 0),
+            (-22, 10),     # level 1
+            (-22, 20),     # level 2
+            (-38, 10),     # level 3
+            (-38, 20),     # level 4
+        ]
+
+    # Find the anchor (tier-0) index for each shifted label's cluster
+    # Walk backwards from each shifted label to find the first non-shifted one
+    cluster_anchor_idx = [None] * n
+    for i in range(n):
+        if tier[i] > 0:
+            # Walk backward to find the tier-0 anchor
+            j = i - 1
+            while j >= 0 and tier[j] > 0:
+                j -= 1
+            cluster_anchor_idx[i] = max(j, 0)
+
+    for i in range(n):
+        t = tier[i]
+        if t == 0 or bboxes[i] is None:
+            continue
+
+        level = ((t - 1) % (len(tier_magnitudes) - 1)) + 1
+        mag_a, mag_b = tier_magnitudes[level]
+
+        # Determine direction: shift AWAY from the cluster anchor
+        anchor_i = cluster_anchor_idx[i]
+        anchor_pos = tick_positions[anchor_i] if anchor_i is not None else tick_positions[0]
+
+        if axis == 'x':
+            # If this tick is to the right of the anchor, shift right; else left
+            if tick_positions[i] >= anchor_pos:
+                dx_pt = mag_a   # shift right
+            else:
+                dx_pt = -mag_a  # shift left
+            dy_pt = mag_b       # always lift up
+        else:
+            dx_pt = mag_a       # always shift left (negative value)
+            # If this tick is below the anchor (larger y in inverted axis),
+            # shift down; else up
+            if tick_positions[i] >= anchor_pos:
+                dy_pt = -mag_b  # shift down (positive y = lower on inverted)
+            else:
+                dy_pt = mag_b   # shift up
+
+        # Get label properties before hiding
+        text = labels[i].get_text()
+        color = labels[i].get_color()
+        fontweight = labels[i].get_fontweight()
+        fontsize = labels[i].get_fontsize() - min(0.8, level * 0.3)
+        pos = tick_positions[i]
+
+        # Hide the original label
+        labels[i].set_visible(False)
+
+        # Place annotation with leader line using blended transform:
+        # The anchor point (xy) is at the tick position on the axis edge.
+        # For x-axis top: (data_x, axes_y=1.0) — top edge
+        # For y-axis left: (axes_x=0.0, data_y) — left edge
+        if axis == 'x':
+            xy_point = (pos, 1.0)
+            xy_transform = ax.get_xaxis_transform()  # x=data, y=axes
+            ha, va = 'center', 'bottom'
+            rotation = 90
+        else:
+            xy_point = (0.0, pos)
+            xy_transform = ax.get_yaxis_transform()  # x=axes, y=data
+            ha, va = 'right', 'center'
+            rotation = 0
+
+        # Place the annotation with leader line
+        ax.annotate(
+            text,
+            xy=xy_point,
+            xycoords=xy_transform,
+            xytext=(dx_pt, dy_pt),
+            textcoords='offset points',
+            fontsize=fontsize,
+            fontfamily='monospace',
+            fontweight=fontweight,
+            color=color,
+            ha=ha, va=va,
+            rotation=rotation,
+            arrowprops=leader_style,
+            zorder=100,
+            annotation_clip=False,
+        )
+
+
+def visualize_all_paths(spectrum, spurious_masses=None,
+                        candidate_paths=None, correct_path=None,
+                        tolerance=0.02, aa_map=None, pep_mass=None,
+                        ion_labels=None, show_aa_mass=True,
+                        title="Peptide Spectrum Graph",
+                        save_path=None, figsize=(18, 18), dpi=300):
+    """
+    Modern visualization of peptide spectrum graph paths.
+
+    Light scientific theme with subtle glow effects for hero paths,
+    refined typography, and smart tick-label de-overlapping.
+
+    Args:
+        spectrum: List of fragment masses.
+        spurious_masses: Optional set/list of masses considered spurious.
+        candidate_paths: List of candidate paths, each a list of (x1, x2) tuples.
+        correct_path: The correct path as a list of (x1, x2) tuples.
+        tolerance: Mass tolerance for snapping and AA matching.
+        aa_map: Dict mapping {mass: aa_name} for edge annotation.
+        pep_mass: Total peptide mass for residual calculation at endpoints.
+        ion_labels: Optional dict mapping {mass: ion_name} (e.g.
+            ``{398.20: "b4", 512.31: "y7"}``). Every axis tick whose mass
+            is *not* spurious and has a match in this dict (within
+            ``tolerance``) gets the ion name appended beside the value,
+            e.g. ``"398.20  b4"``, and its tick label is highlighted.
+        show_aa_mass: When True (default), an edge/residual box that
+            resolves to a single AA shows the letter plus its rounded
+            mass, e.g. ``"J\\n(113)"``. When False, just the letter
+            (``"J"``) is shown — smaller box, no mass. Unresolved
+            (multi-residue/gap) edges always show their mass regardless.
+        title: Plot title string.
+        save_path: If provided, saves figure to this path instead of showing.
+        figsize: Figure dimensions.
+        dpi: Resolution for saved figures.
+    """
+    P = _PALETTE
+
+    # ── 1. Setup & Classification ──────────────────────────────────────────
+    S = sorted(list(set(spectrum)))
+    S_arr = np.array(S)
+
+    spurious_set = set(spurious_masses) if spurious_masses else set()
+    is_spurious = lambda val: val in spurious_set
+
+    def _closest_ion_label(val):
+        """Return the ion name whose mass is closest to *val* within
+        ``tolerance``, or None if ion_labels is empty / no match."""
+        if not ion_labels:
+            return None
+        best_lbl, best_diff = None, tolerance + 1e-9
+        for m, lbl in ion_labels.items():
+            diff = abs(m - val)
+            if diff <= tolerance and diff < best_diff:
+                best_diff, best_lbl = diff, lbl
+        return best_lbl
+
+    # ── 2. Create Figure ───────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=figsize, facecolor=P["bg"])
+    ax.set_facecolor(P["bg"])
+
+    # ── 3. Grid ────────────────────────────────────────────────────────────
+    for mass in S:
+        if is_spurious(mass):
+            # Spurious lines: bold, visible, warm red
+            c, a, ls, lw = '#E06060', 0.45, (0, (6, 3)), 1.2
+        else:
+            c, a, ls, lw = P["grid_clean"], 0.6, (0, (1, 3)), 0.4
+        ax.axvline(x=mass, color=c, linestyle=ls, linewidth=lw, alpha=a)
+        ax.axhline(y=mass, color=c, linestyle=ls, linewidth=lw, alpha=a)
+
+    # ── 4. Nodes ───────────────────────────────────────────────────────────
+    X, Y = np.meshgrid(S, S)
+    is_noise_mask = np.array([is_spurious(m) for m in S])
+    X_noise, Y_noise = np.meshgrid(is_noise_mask, is_noise_mask)
+
+    # Three categories:
+    #   both_spurious: both x and y are spurious masses
+    #   one_spurious:  exactly one of x or y is spurious (cross-point)
+    #   clean:         neither is spurious
+    both_spurious = X_noise & Y_noise
+    one_spurious = (X_noise | Y_noise) & ~both_spurious
+    clean = ~(X_noise | Y_noise)
+
+    # Clean nodes: subtle, as before
+    ax.scatter(X[clean], Y[clean],
+               s=14, c=P["node_clean"], alpha=0.5, zorder=2,
+               edgecolors='none')
+
+    # One-spurious cross-points: medium visibility, red-tinted with edge
+    ax.scatter(X[one_spurious], Y[one_spurious],
+               s=28, c='#F0C0C0', alpha=0.7, zorder=3,
+               edgecolors='#D07070', linewidth=0.5)
+
+    # Both-spurious intersections: most visible, bold red markers
+    ax.scatter(X[both_spurious], Y[both_spurious],
+               s=40, c='#E88080', alpha=0.8, zorder=4,
+               edgecolors='#C04040', linewidth=0.8, marker='D')
+
+    # ── 5. Helpers ─────────────────────────────────────────────────────────
+    def get_closest_in_spectrum(val):
+        idx = (np.abs(S_arr - val)).argmin()
+        closest = S_arr[idx]
+        return closest if abs(closest - val) <= tolerance else val
+
+    def get_snapped_path(raw_path):
+        return [(get_closest_in_spectrum(px), get_closest_in_spectrum(py))
+                for px, py in raw_path]
+
+    def get_anno_text(mass_diff):
+        abs_diff = abs(mass_diff)
+        txt = f"{mass_diff:.2f}"
+        if aa_map:
+            min_diff = tolerance + 1e-9
+            best_name = None
+            for aa_mass, name in aa_map.items():
+                diff = abs(abs_diff - aa_mass)
+                if diff <= tolerance and diff < min_diff:
+                    min_diff = diff
+                    best_name = name
+            if best_name:
+                # Matched a resolved AA — show just the letter, or the
+                # letter plus its rounded integer mass, per show_aa_mass.
+                # Padding the bare letter with spaces widens its otherwise
+                # very narrow box toward a squarer shape.
+                txt = f"{best_name}\n({mass_diff:.0f})" if show_aa_mass else f"  {best_name}  "
+        return txt
+
+    # ── 6. Path Drawing ───────────────────────────────────────────────────
+    def draw_path(path_data, is_hero=False):
+        if not path_data or len(path_data) < 2:
+            return
+
+        snapped = get_snapped_path(path_data)
+
+        if is_hero:
+            line_c   = P["hero_line"]
+            marker_c = P["hero_marker"]
+            box_bg   = P["hero_box_bg"]
+            box_ec   = P["hero_box_ec"]
+            text_c   = P["hero_text"]
+            lw, alpha, ls = 2.8, 0.95, '-'
+            ms, fs = 7, 12.5
+            z = 50
+        else:
+            line_c   = P["cand_line"]
+            marker_c = P["cand_marker"]
+            box_bg   = P["cand_box_bg"]
+            box_ec   = P["cand_box_ec"]
+            text_c   = P["cand_text"]
+            lw, alpha, ls = 1.4, 0.65, (0, (5, 3))
+            ms, fs = 5, 10.5
+            z = 20
+
+        # Subtle glow / shadow effect for hero path
+        if is_hero:
+            for glow_lw, glow_a in [(9, 0.05), (6, 0.08), (4, 0.12)]:
+                for i in range(len(snapped) - 1):
+                    p0, p1 = snapped[i], snapped[i + 1]
+                    ax.plot([p0[0], p1[0]], [p0[1], p1[1]],
+                            color=P["hero_glow"], linewidth=glow_lw,
+                            alpha=glow_a, solid_capstyle='round', zorder=z - 1)
+
+        # Start node
+        start = snapped[0]
+        s_size = 220 if is_hero else 80
+        ax.scatter([start[0]], [start[1]],
+                   color=P["start_fill"], s=s_size,
+                   edgecolors=P["start_edge"], linewidth=1.2,
+                   zorder=z + 5, alpha=0.9)
+        if is_hero:
+            ax.scatter([start[0]], [start[1]],
+                       color=P["start_fill"], s=s_size * 3,
+                       edgecolors='none', alpha=0.06, zorder=z + 4)
+
+        # Edges
+        for i in range(len(snapped) - 1):
+            p0 = snapped[i]
+            p1 = snapped[i + 1]
+
+            ax.plot([p0[0], p1[0]], [p0[1], p1[1]],
+                    color=line_c, linewidth=lw, alpha=alpha, linestyle=ls,
+                    marker='o', markersize=ms,
+                    markerfacecolor=marker_c, markeredgecolor=line_c,
+                    markeredgewidth=1.2, solid_capstyle='round',
+                    zorder=z)
+
+            dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+            mass_jump = max(abs(dx), abs(dy))
+            mid_x = (p0[0] + p1[0]) / 2
+            mid_y = (p0[1] + p1[1]) / 2
+
+            ax.text(mid_x, mid_y, get_anno_text(mass_jump),
+                    ha='center', va='center', fontsize=fs,
+                    color=text_c, fontweight='semibold',
+                    fontfamily='monospace',
+                    bbox=dict(boxstyle='round,pad=0.45',
+                              fc=box_bg, ec=box_ec, alpha=0.92, lw=1.1),
+                    zorder=z + 10)
+
+        # End node (star)
+        end = snapped[-1]
+        e_size = 350 if is_hero else 120
+        ax.scatter([end[0]], [end[1]],
+                   color=P["end_fill"], marker='*', s=e_size,
+                   edgecolors=P["end_edge"], linewidth=0.8,
+                   zorder=z + 15, alpha=0.9)
+        if is_hero:
+            ax.scatter([end[0]], [end[1]],
+                       color=P["end_fill"], s=e_size * 2.5,
+                       edgecolors='none', alpha=0.06, zorder=z + 14)
+
+        # Residual annotation
+        if pep_mass is not None:
+            residual = pep_mass - (end[0] + end[1])
+            label = get_anno_text(residual)
+
+            ax.text(end[0], end[1], label,
+                    ha='center', va='bottom', fontsize=fs,
+                    color=P["res_text"], fontweight='semibold',
+                    fontfamily='monospace',
+                    bbox=dict(boxstyle='round,pad=0.45',
+                              fc=P["res_box_bg"], ec=P["res_box_ec"],
+                              alpha=0.95, lw=1.1),
+                    zorder=z + 20)
+
+    # ── 7. Draw Paths ─────────────────────────────────────────────────────
+    if candidate_paths:
+        for path in candidate_paths:
+            draw_path(path, is_hero=False)
+
+    if correct_path:
+        draw_path(correct_path, is_hero=True)
+
+    # ── 8. Axis Formatting ────────────────────────────────────────────────
+    def _tick_text(v):
+        """Numeric tick label, with the matching b/y ion name appended
+        beside it when the value is not spurious and a match exists."""
+        txt = f"{v:.2f}"
+        if not is_spurious(v):
+            ion = _closest_ion_label(v)
+            if ion:
+                txt = f"{txt}  {ion}"
+        return txt
+
+    x_labels = [_tick_text(v) for v in S]
+    y_labels = [_tick_text(v) for v in S]
+
+    ax.set_xticks(S)
+    ax.set_yticks(S)
+    ax.set_xticklabels(x_labels, rotation=90, fontsize=11,
+                        fontfamily='monospace')
+    ax.set_yticklabels(y_labels, fontsize=11,
+                        fontfamily='monospace')
+    ax.xaxis.tick_top()
+    ax.xaxis.set_label_position('top')
+
+    # Color tick labels — spurious in red/bold (unannotated); non-spurious
+    # values that matched an ion get the ion-highlight color/weight.
+    for tick, val in zip(ax.xaxis.get_major_ticks(), S):
+        lbl = tick.label2
+        if is_spurious(val):
+            lbl.set_color(P["tick_spurious"])
+            lbl.set_fontweight('bold')
+        elif _closest_ion_label(val):
+            lbl.set_color(P["tick_ion"])
+            lbl.set_fontweight('bold')
+        else:
+            lbl.set_color(P["tick_clean"])
+
+    for tick, val in zip(ax.yaxis.get_major_ticks(), S):
+        lbl = tick.label1
+        if is_spurious(val):
+            lbl.set_color(P["tick_spurious"])
+            lbl.set_fontweight('bold')
+        elif _closest_ion_label(val):
+            lbl.set_color(P["tick_ion"])
+            lbl.set_fontweight('bold')
+        else:
+            lbl.set_color(P["tick_clean"])
+
+    # Tick & spine styling
+    ax.tick_params(axis='both', which='both',
+                   color=P["spine"], length=4, width=0.5)
+    for spine in ax.spines.values():
+        spine.set_color(P["spine"])
+        spine.set_linewidth(0.6)
+
+    pad = 5
+    ax.set_xlim(min(S) - pad, max(S) + pad)
+    ax.set_ylim(min(S) - pad, max(S) + pad)
+    ax.invert_yaxis()
+
+    ax.set_xlabel("Fragment mass", labelpad=14,
+                  fontsize=11, color=P["label"], fontfamily='sans-serif')
+    ax.set_ylabel("Fragment mass", labelpad=10,
+                  fontsize=11, color=P["label"], fontfamily='sans-serif')
+
+    # ── 9. Legend ──────────────────────────────────────────────────────────
+    legend_elements = [
+        Line2D([0], [0], color=P["hero_line"], lw=2.8,
+               label='Correct path'),
+        Line2D([0], [0], color=P["cand_line"], lw=1.4,
+               linestyle='--', label='Candidate path'),
+        Line2D([0], [0], marker='o', color='none',
+               markerfacecolor=P["start_fill"], markeredgecolor=P["start_edge"],
+               markersize=8, label='Start node'),
+        Line2D([0], [0], marker='*', color='none',
+               markerfacecolor=P["end_fill"], markeredgecolor=P["end_edge"],
+               markersize=10, label='End node (+ residual)'),
+        Line2D([0], [0], color='#E06060', lw=1.2, linestyle=(0, (6, 3)),
+               alpha=0.45, label='Spurious grid line'),
+        Line2D([0], [0], marker='o', color='none',
+               markerfacecolor='#F0C0C0', markeredgecolor='#D07070',
+               markersize=7, label='Partial spurious node'),
+        Line2D([0], [0], marker='D', color='none',
+               markerfacecolor='#E88080', markeredgecolor='#C04040',
+               markersize=6, label='Full spurious node'),
+        Line2D([0], [0], marker='s', color='none',
+               markerfacecolor=P["tick_ion"], markeredgecolor=P["tick_ion"],
+               markersize=7, label='Annotated ion tick (b/y)'),
+    ]
+
+    leg = ax.legend(handles=legend_elements,
+                    loc='upper right', bbox_to_anchor=(1.0, 1.0),
+                    fontsize=9, frameon=True,
+                    facecolor=P["legend_bg"], edgecolor=P["legend_ec"],
+                    labelcolor=P["legend_text"],
+                    borderpad=1.0, handletextpad=0.8)
+    leg.get_frame().set_alpha(0.95)
+    leg.get_frame().set_linewidth(0.6)
+
+    # ── 10. Title ─────────────────────────────────────────────────────────
+    ax.set_title(title, pad=36, fontsize=15, fontweight='semibold',
+                 color=P["title"], fontfamily='sans-serif',
+                 loc='left')
+
+    '''
+    ax.text(1.0, 1.02, "2D-PC-MS",
+            transform=ax.transAxes, ha='right', va='bottom',
+            fontsize=9, color=P["label"], alpha=0.35,
+            fontfamily='monospace', fontweight='light')
+    '''
+    # ── 11. De-overlap tick labels ────────────────────────────────────────
+    # Must draw canvas first so label bounding boxes are computed
+    fig.canvas.draw()
+    _stagger_tick_labels(ax, axis='x', min_gap_pt=6)
+    _stagger_tick_labels(ax, axis='y', min_gap_pt=8)
+
+    # ── 12. Save / Show ───────────────────────────────────────────────────
+    if save_path:
+        directory = os.path.dirname(save_path)
+        if directory and not os.path.exists(directory):
+            os.makedirs(directory)
+        plt.savefig(save_path, bbox_inches='tight', dpi=dpi,
+                    facecolor=fig.get_facecolor(), edgecolor='none')
+        plt.close(fig)
+        print(f"Saved → {save_path}")
+    else:
+        plt.tight_layout()
+        plt.show()
+
+
+# ─── Demo ─────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    spectrum = [0.00, 18.01, 299.14, 299.16, 396.16, 400.29, 414.18,
+                499.36, 504.25, 527.27, 598.18, 598.30, 628.40]
+    spurious = [299.14, 299.16, 396.16, 504.25, 598.18]
+
+    aa_map = {
+        299.16: "?",
+        115.03: "D",
+        99.07:  "V",
+        113.08: "J",
+        71.04:  "A",
+        129.04: "E",
+    }
+
+    # Which non-spurious axis values correspond to which b/y ion.
+    ion_labels = {
+        18.01:  "b0",
+        400.29: "b3",
+        499.36: "b4",
+        414.18: "y2",
+        527.27: "y3",
+        628.40: "y4",
+    }
+
+    correct = [(18.01, 18.01), (18.01, 299.16), (299.16, 299.16),
+               (299.16, 400.29), (400.29, 400.29), (400.29, 499.36),
+               (499.36, 499.36), (499.36, 504.25),
+               (504.25, 504.25), (504.25, 628.40)]
+
+    visualize_all_paths(
+        spectrum,
+        spurious_masses=spurious,
+        candidate_paths=[],
+        correct_path=correct,
+        tolerance=0.5,
+        aa_map=aa_map,
+        ion_labels=ion_labels,
+        pep_mass=628.40,
+        title="VEA3+  •  Ion-Annotated Axes",
+        save_path="/home/claude/demo_ion_labels.png",
+    )

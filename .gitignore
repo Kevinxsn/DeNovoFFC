@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+
+# Build output
+cpp/build/
+bin/denovo_mms
+
+# Generated, not committed: 114 MB, and rebuilt in ~30 s (Python) or ~80 ms (C++)
+src/reconstruct/edges.json
+
+# Default output tree
+result/
+*.log
