@@ -423,20 +423,76 @@ available and a single `g++` invocation otherwise.
 
 ### 6.2 What stayed in Python, and why
 
-* **`merge_duplicate_ffcs_charge` / `prepare_ffc_data`** — §4.2. Runs once, on
-  ~15 k rows, and its KD-tree pass is the one genuine scipy dependency. Porting
-  it would buy ~0.3 s and risk the two implementations clustering the same data
-  differently, which is precisely the class of bug this consolidation exists to
-  avoid.
-* **The whole annotation route.** It is not a hot loop — it is Excel writing,
-  fragment-index lookups and report formatting, and it is where the science is
-  still moving. A C++ copy would fork the design docs' source of truth.
+* **`merge_duplicate_ffcs_charge` / `prepare_ffc_data`** — §4.2. Kept in Python
+  because its KD-tree proximity pass is the one genuine scipy dependency, and
+  because two implementations clustering the same data differently is exactly
+  the class of bug this consolidation exists to remove.
+
+  > **⚠ This is now the largest remaining cost on the de novo route, and the
+  > obvious next thing to port.** An earlier revision of this document claimed
+  > porting it "would buy ~0.3 s". That was wrong: measured, the merge takes
+  > **2.2 s (VEA 3+) to 3.2 s (KWK 5+)** on a ~15 k-row table — about **7× the
+  > entire C++ engine**, and 86 % of the de novo route's wall clock. Nor is the
+  > KD-tree the cost: the profile is 27 468 pandas `Series` constructions, i.e.
+  > a per-cluster Python loop. Porting it (or just vectorising the loop) is
+  > worth more than everything already ported.
+* **The whole annotation route.** It is where the science is still moving, so a
+  C++ copy would fork the design docs' source of truth. It is also not the
+  shape the C++ engine is good at: measured on VEA 3+ at top500 (17.8 s), the
+  single largest item is **openpyxl writing the `.xlsx` — 7.5 s, 42 %** — with
+  the fragment-index annotation itself only ~1.2 s. The line-based stage is
+  9.0 s, of which the de novo machinery it shares with `denovo_core`
+  (`_tffc_analysis` 3.4 s, `_reconstruction_counts` 2.5 s,
+  `_master_set_reconstruction` 2.4 s) is the part a port would actually help.
+  Faster Excel writing would beat any of it.
 * **The deconvolution.** Dominated by TopFD (an external binary) and by the
   already-vectorised numpy detector `deconvolution.md` §5 describes.
 * **`evaluate.py`.** Benchmark scoring, off the hot path — and keeping it out
   of the engine is what makes "no ground truth in the pipeline" checkable.
 
-### 6.3 Measured
+### 6.3 ⚠ Coverage — what is C++, and what is not
+
+"The de novo part is C++" is true but easy to over-read. The engine is a port
+of `denovo_core.py` **in full**, so it contains line detection, the master set,
+the DAG *and* the reconstruction — but only for the de novo route. Every other
+call site of the same algorithm is still Python.
+
+| stage | de novo route | annotation route | deconvolution |
+|---|---|---|---|
+| read table | Python (pandas) | Python | Python |
+| mirror-duplicate merge + top-N | **Python** (the bottleneck, §6.2) | Python | Python |
+| **line detection** | **C++** (`lines.cpp`) | Python (`_oa_v2.detect_lines_oa`) | Python (numpy `most_informative_line_fast`) |
+| edge table | **C++** (generated) | Python (`edges.json`) | — |
+| line classification / satellites | **C++** (`pipeline.cpp`) | Python | — |
+| master TFFC-set + convergence | **C++** (`masterset.cpp`) | Python (`_tffc_analysis`) | — |
+| 2D-DAG + heaviest path | **C++** (`dag.cpp`) | Python (`_master_set_reconstruction`) | — |
+| **per-FFC theoretical annotation** | *not part of this route* | **Python only** (`ffc_annotator.py`, 1354 lines — never ported) | — |
+| coverage table + `.xlsx` | *not part of this route* | Python (openpyxl) | — |
+| charge / monoisotopic-mass assignment | — | — | Python + **TopFD** (external C++ binary) |
+
+Share of wall clock actually spent in C++: **~12 %** on the de novo route
+(0.46 s of 3.68 s for KWK 5+ top500 — the merge dominates the rest), and
+**0 %** on the annotation and deconvolution routes.
+
+> **⚠ Line detection now exists in four implementations**, and only one pair of
+> them is guarded by a test:
+>
+> | implementation | used by | checked against the reference? |
+> |---|---|---|
+> | `_oa_v2.detect_lines_oa` (Python) | the annotation route | it *is* the reference |
+> | `_oa.detect_lines_oa` (Python, v1) | legacy annotation | kept in sync historically |
+> | `most_informative_line_fast` (numpy) | the deconvolution | yes — `line_detection_oa.assert_detectors_agree` |
+> | `lines.cpp` (C++) | the de novo engine | yes — `tests/parity.py` |
+>
+> plus `ETD/line_internal_annotation_cz.py`'s copy. `deconvolution.md` §10 says
+> "import the detector, don't copy it", precisely so the deconvolution and the
+> annotation cannot drift into clustering the same data differently — and the
+> C++ port is a fourth copy of it. It is a *guarded* copy, but the guard only
+> holds while `tests/parity.py` is actually run. **If `_oa_v2`'s detector
+> changes, both `assert_detectors_agree` and `tests/parity.py` must be re-run**,
+> and the C++ needs the same edit by hand.
+
+### 6.4 Measured
 
 Seven benchmark peptides, top500, one process per peptide:
 
@@ -451,7 +507,7 @@ The C++ figures **include** process start and a full edge-table regeneration
 every run, so they are what a caller actually waits for, not an inner-loop
 microbenchmark. `bin/denovo_mms --data ...` prints the split.
 
-### 6.4 ⚠ Parity is checked, not assumed
+### 6.5 ⚠ Parity is checked, not assumed
 
 ```
 PY=/path/to/python
@@ -467,7 +523,7 @@ rounds, tied-path count, and the full set of reconstructions** — not merely
 Run it after *any* change to either side. If they disagree, **the Python is
 right by definition** and the port has a bug.
 
-### 6.5 Porting traps — the things that are easy to get subtly wrong
+### 6.6 Porting traps — the things that are easy to get subtly wrong
 
 These are not hypothetical; each one is a place where a "cleaner" C++ version
 would silently diverge.

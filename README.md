@@ -14,9 +14,14 @@ peptide known    →  [deconvolution]  →  annotation  (de novo runs inside it)
 Deconvolution is optional on both, and skipped automatically when the input is
 already deconvolved.
 
-The de novo search is implemented in C++ (`cpp/`) and runs about **25–30×
+The **de novo route** is implemented in C++ (`cpp/`) — line detection, the
+master TFFC-set, the 2D-DAG and the reconstruction — and runs about **25–30×
 faster** than the Python reference, which is kept alongside it and checked
 against it on every reported quantity (`tests/parity.py`).
+
+The **annotation route and the deconvolution are Python**, as is the
+mirror-duplicate merge both routes share. See DESIGN.md §6.3 for exactly which
+stage is which, and what is worth porting next.
 
 ---
 
