@@ -1,320 +1,275 @@
-# DeNovoMMS
+# DeNovoFFC
 
-Peptide sequencing from **MMS maps** — 2D fragment–fragment correlation data,
-where each row is a pair of m/z values that co-vary across scans because both
-fragments came from the same precursor.
+DeNovoFFC reconstructs peptide sequences from two-dimensional fragment–fragment
+correlation (FFC) maps. It supports HCD b/y and ETD c/z· analysis, with optional
+combination of complementary acquisitions, orientation-constrained reconstruction
+(RBDP), and FFC-based ranking of unresolved mass gaps.
 
-One command, two routes:
+The de novo route uses a measured precursor mass and does not require a sequence.
+Supplying a sequence selects a separate, reference-assisted annotation route.
+Results retain tied reconstructions and unresolved gaps so that ambiguity remains
+visible.
 
-```
-peptide unknown  →  [deconvolution]  →  de novo sequencing
-peptide known    →  [deconvolution]  →  annotation  (de novo runs inside it)
-```
+The C++17 engine performs de novo reconstruction, RBDP, prefix combination, and
+gap-candidate enumeration. Python handles preprocessing, deconvolution,
+reference-assisted annotation, and gap evidence matching. A Python reference
+implementation of the reconstruction engine is also included.
 
-Deconvolution is optional on both, and skipped automatically when the input is
-already deconvolved.
+## Installation
 
-The **de novo route** is implemented in C++ (`cpp/`) — line detection, the
-master TFFC-set, the 2D-DAG and the reconstruction — and runs about **25–30×
-faster** than the Python reference, which is kept alongside it and checked
-against it on every reported quantity (`tests/parity.py`).
-
-The **annotation route and the deconvolution are Python**, as is the
-mirror-duplicate merge both routes share. See DESIGN.md §6.3 for exactly which
-stage is which, and what is worth porting next.
-
----
-
-## Install
+From the repository root, use Python 3.10 or later and a C++17 compiler:
 
 ```bash
-git clone <this repo> && cd DeNovoMMS
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+export DENOVOFFC_PYTHON="$VIRTUAL_ENV/bin/python"
 
-# 1. Python side
-pip install -r requirements.txt          # numpy, pandas, scipy, openpyxl, matplotlib
-
-# 2. C++ de novo engine  (needs only a C++17 compiler)
-cpp/build.sh                             # -> bin/denovo_mms
-
-# 3. Check what the install can see
-./denovomms info
+./cpp/build.sh
+./denovoffc info
+python tests/run_tests.py
 ```
 
-`./denovomms` picks an interpreter that can import pandas. To pin one:
+The build uses CMake when available and falls back to `g++`. On Linux,
+`DENOVOFFC_NO_CMAKE=1 ./cpp/build.sh` explicitly selects the compiler-only build.
+`--engine auto` uses C++ when built; `--engine cpp` requires it, and
+`--engine python` selects the reference implementation. The Python engine generates
+its compound-mass table on first use, which takes additional time and disk space.
+
+The source includes the modules, lookup resources, and synthetic data needed for
+the examples and portable tests. No separate research repository is needed.
+
+TopFD is an optional external dependency for the second deconvolution stage.
+Set `DENOVOFFC_TOPFD_BIN` to its executable and, if needed,
+`DENOVOFFC_TOPFD_LIB` to its library directory. Use `--no-topfd` when running only
+the first deconvolution stage. Already-deconvolved maps do not require TopFD.
+
+## Try the included example
+
+The [synthetic example](examples/synthetic/README.md) contains complementary HCD
+and ETD maps. These are generated data intended to demonstrate the workflow.
+Run the following commands from the repository root:
 
 ```bash
-export DENOVOMMS_PYTHON=/path/to/python
+# Reconstruct the HCD acquisition.
+./denovoffc run --data examples/synthetic/maps/hcd.tsv \
+    --charge 3 --mass 1936.888995 --terminus H2O --top-list 500 \
+    --engine cpp -o result/example_hcd
+
+# Reconstruct the ETD acquisition.
+./denovoffc run --data examples/synthetic/maps/etd.tsv \
+    --charge 4 --mass 1936.888995 --terminus H2O --fragmentation ETD \
+    --top-list 500 --engine cpp -o result/example_etd
+
+# Combine both acquisitions and rank fills for the remaining gaps.
+./denovoffc combine --manifest examples/synthetic/sample.json \
+    --engine cpp --gap-fill ffc -o result/example_combined
 ```
 
-### Optional: TopFD (Stage 2 of the deconvolution)
+The combined result is `result/example_combined/reconstruction.json`; gap rankings
+are in `result/example_combined/gap_filling/`. The example retains alternative
+reconstructions. A completed run does not imply a unique sequence.
 
-TopFD is part of [TopPIC](https://www.toppic.org/) and is **not** bundled, so
-it is not pinned to a stale release. Only needed if you deconvolve.
+`combine` and `fill-gaps` require an empty or new output directory. Choose a new
+output name when repeating these commands.
+
+## Use your own data
+
+### Input tables and precursor chemistry
+
+Use a tab-separated table (`.tsv`) or comma-separated table (`.csv`). The included
+[maps](examples/synthetic/maps/) illustrate the column names and layout:
+
+| Columns | Meaning |
+| --- | --- |
+| `m/z A`, `m/z B` | The two fragment m/z values in each FFC |
+| `Ranking` | FFC ranking used for top-N selection |
+| `Covariance`, `Partial Cov.`, `Score` | Correlation measurements and score |
+| `intensity A`, `intensity B` | Fragment intensities, used during deconvolution |
+| `charge_A`, `charge_B` | Assigned fragment charges in deconvolved input |
+
+With `--deconvolve auto`, the presence of both charge columns selects the
+already-deconvolved route. Set `--deconvolve yes` to deconvolve raw input;
+`--deconvolve no` skips this stage.
+
+Specify `--mass` as the **neutral precursor mass in Da**, not precursor m/z or
+charged mass. Set `--terminus H2O` for a free carboxyl terminus or `--terminus NH3`
+for a C-terminal amide. Use the measured precursor charge for `--charge`.
+
+`--fragmentation HCD` selects b/y by default. `--fragmentation ETD` or `ETHCD`
+selects c/z·, whose complementary fragment pair carries z−1 charges; this route
+requires precursor charge ≥3. An explicit `--ion-series by` selects a separate
+b/y analysis of an EThcD map. Both ladders are not analyzed jointly in one run.
+
+To convert a blocked covariance export before deconvolution, replace these input
+filenames with your files:
 
 ```bash
-export DENOVOMMS_TOPFD_BIN=/path/to/topfd
-export DENOVOMMS_TOPFD_LIB=/path/to/toppic/lib     # its shared libraries
+./denovoffc prepare --format blocked-covariance \
+    --covariance Covariance_Data.x --intensity Intensity_Sum.x \
+    -o prepared/map.tsv
 ```
 
-Without it, add `--no-topfd`: Stage 1 alone still produces a usable table, it
-just places fewer fragments.
+Preparation writes a flat FFC table and a `.meta.json` sidecar. Preserve sidecars
+with their maps: they record preparation and, for deconvolved output, line-model
+settings.
 
----
+### Optional RBDP reconstruction
 
-## Quick start
-
-### The peptide is unknown — de novo
+The default reconstruction method is `unit`. RBDP applies orientation constraints
+from internal-line evidence during the final graph search. It does not change
+line discovery or provide a calibrated probability of sequence correctness.
 
 ```bash
-./denovomms run \
-  --data map.tsv \
-  --charge 5 \
-  --mass 4001.3781 \
-  --terminus NH3 \
-  -o result/
+./denovoffc run --data examples/synthetic/maps/hcd.tsv \
+    --charge 3 --mass 1936.888995 --terminus H2O --top-list 500 \
+    --reconstruction-method rbdp-guarded --engine cpp -o result/example_rbdp
 ```
 
-`--mass` is the precursor **neutral** mass, measured. Output:
+| `--reconstruction-method` | De novo behavior |
+| --- | --- |
+| `unit` | Ordinary reconstruction, without RBDP constraints |
+| `rbdp` | Constrained reconstruction; may return no candidates when evidence is insufficient or constraints are infeasible |
+| `rbdp-guarded` | Falls back to the unit result on abstention, infeasibility, or a shorter constrained optimum; records the reason |
 
-```
-result/denovo/top200/<label>_denovo_top200.json    the full result
-                     <label>_denovo_top200.xlsx    sheets: lines, master_set,
-                                                   reconstructions
-result/denovo/top500/...
-result/denovo/summary.csv                          one row per top-N
-result/run.json                                    what was run
-```
+RBDP is supported for HCD b/y. It is rejected for c/z; explicit EThcD b/y use has
+not been validated. `--recon-sigma-scale` independently scales final-graph
+uncertainties and defaults to `1.0`. Enabling RBDP does not change that value.
+Inspect the recorded effective method and fallback reason when comparing runs.
 
-### The peptide is known — annotation
+### Combine acquisitions
 
-Add `--seq`. The route switches automatically.
+A JSON manifest describes acquisitions of the same analyte. Start with
+[examples/synthetic/sample.json](examples/synthetic/sample.json), then set the
+neutral mass, terminus, and each dataset's path, fragmentation, charge, and top-N.
+Paths are relative to the manifest. Each dataset needs a distinct ID;
+`acquisition_id` identifies the underlying acquisition so that repeated views are
+not treated as independent measurements. Do not put a reference sequence in a
+de novo manifest.
 
 ```bash
-./denovomms run \
-  --data map.tsv \
-  --seq KWKLFKKIEKVGQNIRDGIIKAGPAVAVVGQATQIAK \
-  --charge 5 --terminus NH3 \
-  -o result/
+./denovoffc combine --manifest examples/synthetic/sample.json \
+    --selection explicit --datasets hcd_1 etd_1 -o result/example_pair
 ```
 
-There is no need to also run de novo: the annotation's line-based stage builds
-the same master TFFC-set and reconstructs from it, *and* tells you which
-theoretical ion every FFC is.
+The default `--mode prefix` combines oriented prefix boundaries from candidate
+reconstructions. `--selection all` uses all datasets; `best-per-series` chooses
+one per ion series using resolved residue count, longest resolved run, and gap
+count. These are presentation criteria, not estimates of correctness.
 
-```
-result/annotation/ffc_annotation/<label>_ffc_annotation.xlsx
-result/annotation/line_based/top500/<label>_line_based_top500.xlsx
-result/annotation/line_based/top2000/...
-result/annotation/graph/top500/...png     (with --graph)
-```
+The default `--candidate-policy all` searches candidate tuples up to
+`--max-combinations` (10,000). Incomplete source enumeration or an oversized
+product produces `combination_limit`. `--candidate-policy first` explicitly uses
+only the first candidate per dataset and records that the search is incomplete.
 
-If your dataset name is in `src/data_prep/pep_seq.xlsx`, `--name` resolves the
-sequence, charge and C-terminus for you:
+Dataset, acquisition and analyte IDs become directory names and table fields:
+use letters, digits, `.`, `_`, `+` or `-`, starting with a letter or digit.
+Put free text in a dataset's `label`. `--selection explicit --datasets` must
+list distinct, known IDs. Two datasets of one acquisition are accepted only as
+exact duplicates (same file and settings), which are combined once; choose
+between different representations of one acquisition explicitly.
+
+A dataset can name a prior reconstruction artifact instead of a map. It must
+declare itself sequence-free (`kind`, `reference_assisted: false`) and record
+chemistry that matches the manifest: neutral mass (within `mass_tolerance_da`,
+default 0.001 Da), terminus, ion series, precursor charge and coordinate basis.
+Reference-assisted, contradictory or mismatched artifacts are refused before
+any output is written. A combined result cannot be combined again; combine the
+original datasets instead. A legacy result that records no provenance is
+refused unless you pass `--assume-sequence-free`, which is recorded with the
+result. A metadata sidecar next to a map must agree with the manifest's mass,
+series and charge.
+
+### Rank unresolved gaps
+
+Gap scoring can follow `run` or `combine` with `--gap-fill ffc`, or run separately:
 
 ```bash
-./denovomms run --data map.tsv --name HAD_33_Z4_E16 -o result/
+./denovoffc fill-gaps \
+    --reconstruction result/example_combined/reconstruction.json \
+    --evidence-manifest examples/synthetic/sample.json --score-datasets all \
+    -o result/example_gaps
 ```
 
-### Starting from a raw map — deconvolve first
+Each gap is evaluated independently while other gaps remain unresolved mass
+blocks. Candidate strings must fall within `--gap-tol-da` (default 0.03 Da).
+If enumeration exceeds `--gap-max-candidates` (50,000), the gap is left unresolved.
+The default ranking compares parental FFC matches, then shorter fill length,
+then clean and total FFC matches. The default scoring depth is 500 FFCs per map,
+with 20 ppm b/y and 30 ppm c/z matching tolerances.
+
+`--fill-policy rank-only` is the default. `unique-best` adds a separate proposal
+when one fill ranks first without a tie; it does not alter the original candidate.
+A fully filled proposal's mass is computed from its residue symbols and terminus,
+and must match the measured neutral mass within `--proposal-mass-tol-ppm`
+(default 10 ppm, independent of `--gap-tol-da` and of the number of filled
+gaps). A unique winner is not a confidence estimate. `fill-gaps` applies the
+same provenance and chemistry checks as `combine` to its reconstruction.
+Gap enumeration uses C++ when available; FFC matching currently uses Python.
+`--workers` enables parallel scoring. `--gap-engine cpp` is not implemented.
+
+### Annotate a known sequence
+
+Supplying `--seq` selects reference-assisted annotation. For the synthetic HCD map:
 
 ```bash
-./denovomms run \
-  --data raw_ffc_table \
-  --charge 3 --mass 1605.8474 --terminus H2O \
-  --deconvolve yes \
-  -o result/
+./denovoffc run --data examples/synthetic/maps/hcd.tsv \
+    --seq GASPVTDNEKWRYHMF --charge 3 --terminus H2O --top-list 500 \
+    -o result/example_annotation
 ```
 
-Writes `result/deconvolution/merge/<label>_merged.tsv` and analyses it.
+The precursor mass is calculated from the sequence if `--mass` is omitted.
+Annotation uses the known sequence when aligning evidence and must be evaluated
+separately from de novo reconstruction. Reference-assisted combination is also
+available through `combine --mode annotated-master --reference-sequence`;
+see `./denovoffc combine --help` for its selection options.
 
-`--deconvolve` takes `auto` (default), `yes` or `no`. `auto` deconvolves only
-when the input has no `charge_A` / `charge_B` columns — i.e. when it is raw.
-The decision is printed.
+## Read the results
 
-### ETD / EThcD
+Single-map de novo runs write JSON and spreadsheet results under
+`denovo/top<N>/`, plus `denovo/summary.csv` and `run.json`. Combination writes
+`reconstruction.json`, per-dataset reconstructions under `runs/`, and
+`combination/selection.tsv`. Gap scoring writes `gap_filling/gaps.json`,
+`candidates.tsv`, `evidence.tsv`, and `proposals.json`.
+
+| Result field | Interpretation |
+| --- | --- |
+| `candidates` | Structured residue/gap blocks, prefix boundaries, and provenance |
+| `best_weight` / `objective_score` | Graph-search objective, not a probability |
+| `returned_path_count` | Number of candidates listed |
+| `exact_optimal_path_count` | Exact count as a decimal string where available; combined results may report `null` |
+| `enumeration_truncated` | Whether path listing stopped before all optimal paths were returned |
+| `status` | Outcome such as `ok`, `no_path`, or `combination_limit` |
+| `chemistry`, `effective_parameters`, `reconstruction` | Chemistry and method settings, where supplied by the producing stage |
+
+Numeric tokens in a displayed sequence are unresolved masses in Da. `J` denotes
+an unresolved isoleucine/leucine assignment. `--max-paths` limits the number of
+listed paths. `--presentation-order informative` sorts tied candidates by how
+much sequence they resolve; the first candidate is not necessarily correct.
+
+Exit code 0 means the analysis completed, including explicit no-path or
+budget-limit outcomes. Check the result status before using candidates. Exit
+code 1 indicates a runtime or I/O failure; code 2 indicates invalid input or an
+integrity error. Full options are available through `./denovoffc <command> --help`.
+
+## Validation and current scope
 
 ```bash
-./denovomms run --data etd_map.tsv --charge 6 --mass 4490.5753 \
-                --terminus H2O --fragmentation ETD -o result/
+python tests/run_tests.py
+python tests/run_tests.py -k rbdp
+bin/denovo_tests
 ```
 
-ETD cleaves a different bond, so the ladder is c/z-dot rather than b/y. De novo
-route only; for annotated c/z work see `src/ETD/run_etd_annotation.py`.
+The portable suite uses synthetic fixtures and requires no private data, TopFD,
+or network access. Optional measured-data checks are described in
+[benchmarks/README.md](benchmarks/README.md); their data and local manifests are
+not required for normal use.
 
----
+Prefix combination and gap scoring are experimental. Prefix combination can use
+only boundaries retained by the individual reconstructions, and its accuracy
+has not been established on a broad independent benchmark. Gap evidence can
+favor an incorrect fill. RBDP's reduction in the number of tied candidates does
+not, by itself, establish improved sequence accuracy. The current gap dictionary
+uses unmodified residues.
 
-## Input format
-
-A tab- or comma-separated table with a header. Required:
-
-| column | meaning |
-|---|---|
-| `m/z A`, `m/z B` | the two correlated fragment m/z values |
-| `Ranking` | correlation rank, 1 = best; `-1` = unranked (dropped) |
-
-A **deconvolved** table also has `charge_A` / `charge_B`; a **raw** one
-typically has `Covariance`, `Partial Cov.`, `Score`, `intensity A`,
-`intensity B` instead. Use `--col-a` / `--col-b` / `--ranking-col` on the C++
-engine if your columns are named differently; for a raw table headed by extra
-lines, `--skiprows`.
-
----
-
-## The three things you must get right
-
-These are chemistry, not tuning. **Each of them fails silently when wrong** —
-the pipeline still returns a reconstruction, it is just never the right one.
-
-| flag | what it is | wrong value gives you |
-|---|---|---|
-| `--mass` | precursor **neutral** mass | every alignment shift off; no parental line |
-| `--terminus` | `H2O` (free acid) or `NH3` (amide) | every C-terminal fragment 0.984 Da off |
-| `--fragmentation` | `HCD` (b/y) or `ETD`/`ETHCD` (c/z·) | ladder on the wrong charge sum → 0 parental lines |
-
-If a run reports **0 parental lines** or **0 master breakpoints**, check these
-three before anything else.
-
----
-
-## Tuning
-
-Defaults are the values the published benchmarks were measured at. The two
-worth knowing:
-
-**`--top-list` — how deep into the ranking to read.** On the de novo route this
-is the dominant knob and **lower is cleaner**: across seven benchmark peptides,
-7/7 reconstruct correctly at top200 and top500, 4/7 at top1000, 2/7 at top2000.
-Coverage does keep rising past 500, but wrong coordinates rise about ten times
-faster, and one wrong coordinate usually costs the whole reconstruction.
-Defaults: `200 500` de novo, `500 2000` annotation.
-
-**`--tol-ppm` — fragment-mass relative error.** Drives every uncertainty in the
-de novo model. Default 25 (de novo) / 30 (annotation); flat across 20–40.
-
-Others: `--delta` (line-detection gap, default 0.015 Da — it breaks above
-0.018), `--secondary-gate`, `--accept-ambiguity`, `--no-mocks`,
-`--merge-tolerance`, `--max-paths`. `denovomms run --help` lists them all.
-
-### Engine
-
-```bash
---engine auto      # C++ if built, else Python  (default)
---engine cpp       # require the C++ engine
---engine python    # the reference implementation
-```
-
-Both produce identical results; `python` is there so a suspected port bug can
-be settled in one command.
-
----
-
-## Reading the output
-
-**De novo.** A *gapped* reconstruction: residues the data resolves appear as
-letters, unresolved runs as their mass. `I` and `L` are indistinguishable by
-mass and print as `J`. `(sink)` marks the one gap the N- and C-terminal ladders
-never bridged.
-
-```
-830.515 - 241.177 - EKVG - 511.281 - D(sink) - 170.107 - JKAGPAVAVVGQA - 541.324
-```
-
-Several reconstructions may tie. That is the size of the tie, not a shortlist
-to sift — with no ground truth there is nothing to rank them by.
-
-The `.xlsx` has three sheets: `lines` (each detected line, its category, its
-alignment shift, what it contributed), `master_set` (every breakpoint with its
-uncertainty, evidence count and which line proposed it) and `reconstructions`.
-
-**Annotation.** A coverage table — rows are backbone bonds, columns are
-detected lines, cells are the annotation. The summary line the CLI prints:
-
-```
-top500: breakpoint coverage 100.0%, master TFFC-set 100.0%, #incorrect 4,
-        reconstructions 1/yes
-```
-
-`#incorrect` counts master TFFCs matching no backbone bond — ones added in
-error. **When the reconstruction is wrong, read that number first.**
-
----
-
-## The benchmark
-
-Seven reference peptides, run end to end and graded against their known
-sequences:
-
-```bash
-./denovomms bench                        # the 7 HCD peptides, top200 + top500
-./denovomms bench --set etd              # the 7 ETD / EThcD datasets
-./denovomms bench --set all              # both
-./denovomms bench --only KWK5+ LL6+ -v   # a subset, with per-run detail
-./denovomms bench --top-list 500         # one cutoff
-./denovomms bench --engine python        # the reference engine instead
-```
-
-Takes ~20 s for all seven (about 4 s of that in the engine; the rest is
-loading and merging the tables). Prints a per-run table, the totals, and each
-peptide's reconstruction, and writes `result/benchmark/benchmark.csv` plus a
-per-run `.xlsx`.
-
-```
-  top200: 7/7 correct   mean coverage 68.5%   wrong coordinates 0   residues resolved 98/188
-  top500: 7/7 correct   mean coverage 71.1%   wrong coordinates 1   residues resolved 107/188
-```
-
-⚠ This is the **only** place a ground-truth sequence enters the de novo route,
-and it enters strictly *after* a result exists. `--set etd` reports 5/7 per
-cutoff and 6/7 across the two — line detection is non-monotonic in top-N, so a
-peptide can be right at one cutoff and wrong at another without either being a
-regression.
-
-The benchmark needs the reference data under `/home/sux002/data`.
-
-## Tests
-
-```bash
-python tests/parity.py            # C++ engine vs Python reference (28 runs)
-python tests/parity.py --etd
-tests/smoke.sh                    # every route, end to end
-```
-
-`parity.py` diffs line categories, master-set coordinates, convergence rounds
-and the full set of tied reconstructions — not just "same peptide". Run it
-after any change to either implementation.
-
-Both need the benchmark data under `/home/sux002/data`.
-
----
-
-## Using the C++ engine directly
-
-```bash
-bin/denovo_mms --data merged_map.tsv --charge 5 --mass 4001.3781 \
-               --terminus NH3 --top-n 500 --json out.json
-bin/denovo_mms --help
-```
-
-⚠ It expects an **already-merged** table (mirror duplicates collapsed). The
-merge stays in Python; `./denovomms run` does it for you. `--top-n` here only
-applies the ranking cut.
-
----
-
-## Layout
-
-```
-denovomms          entry point
-pipeline/          route selection and stage wrappers
-cpp/               the C++ de novo engine
-bin/denovo_mms     built binary
-src/               the analysis modules, with their own design docs
-tests/             parity + smoke
-DESIGN.md          why everything is the way it is -- read this before changing anything
-```
-
-`src/` keeps the directory layout the modules were written against, so each of
-them imports its siblings unchanged. Their design docs travel with them:
-`src/deconvolution/deconvolution.md`, `src/line_based_annotation/line_based.md`,
-`src/annotation_pepline/annotation_pipeline.md`, `src/de_novo/denovo.md`,
-`src/ETD/etd.md`.
+Implementation details and module boundaries are documented in [DESIGN.md](DESIGN.md).

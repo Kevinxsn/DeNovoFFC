@@ -658,13 +658,10 @@ def double_with_swapped_columns(df, col1, col2, extra_swap_pairs=None, reset_ind
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import os  # [DeNovoFFC] example data root: $DENOVOFFC_DATA_ROOT
     from line_finding import load_ffc_excel, prepare_ffc_data  # reuse loaders
 
-    #DATA_PATH = "/Users/kevinmbp/Desktop/2D_spec_dict/data/short_peptide/VEA3+.txt"
-    #DATA_PATH = "/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/CovarianceData.GLP2_Z4_NCE15_200_ions"
-    #DATA_PATH = "/Users/kevinmbp/Desktop/2D_spec_dict/pepline/result/HAD_merged.tsv"
-    #DATA_PATH = "/Users/kevinmbp/Desktop/2D_spec_dict/pepline/result/VEA_merged.tsv"
-    DATA_PATH = "/home/sux002/projects/2D_spec_dict/deiso/data/LLG6+_with_intensity.txt"
+    DATA_PATH = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "deiso/data/LLG6+_with_intensity.txt")
     PARENT_CHARGE = 6
     DELTA = 0.005
     MIN_FFC = 3

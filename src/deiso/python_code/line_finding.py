@@ -516,11 +516,12 @@ def prepare_ffc_data(
 # =============================================================================
 
 if __name__ == "__main__":
+    import os  # [DeNovoFFC] example data root: $DENOVOFFC_DATA_ROOT
     # ── Configuration ─────────────────────────────────────────────────────
     
     EXCEL_PATH = (
-        "/Users/kevinmbp/Desktop/2D_spec_dict/anti_symmetric/data/"
-        "Covariance Scoring Tables 10000 Scans.xlsx"
+        os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "anti_symmetric/data/"
+                     "Covariance Scoring Tables 10000 Scans.xlsx")
     )
     SHEET_NAME = "VEADIAGHGQEVLIR-mz536-3_cov"
     PARENT_CHARGE = 3
@@ -538,7 +539,7 @@ if __name__ == "__main__":
 
     # ── Load & prepare ────────────────────────────────────────────────────
     #ffc_df = load_ffc_excel(EXCEL_PATH, SHEET_NAME)
-    data_path = '/Users/kevinmbp/Desktop/2D_spec_dict/data/short_peptide/VEA3+.txt'
+    data_path = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "data/short_peptide/VEA3+.txt")
     ffc_df = pd.read_csv(data_path, sep=r"\s+", skiprows=1, header=None, engine="python")
     ffc_df.columns = ["m/z A", "m/z B", "Covariance", "Partial Cov.", "Score", "Ranking"]
     ffc_df = prepare_ffc_data(ffc_df, top_n=TOP_N)

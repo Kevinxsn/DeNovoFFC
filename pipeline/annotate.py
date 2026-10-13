@@ -57,6 +57,10 @@ DEFAULTS = dict(
     loose_mock=True,
     accept_ambiguity=False,
     graph=False,
+    # Opt-in: replace the master-set reconstruction by RBDP (HCD b/y only).
+    # Reference-assisted -- the coordinates are snapped to the known sequence.
+    reconstruction_method="unit",
+    rbdp_evidence="v2",
 )
 
 DEFAULT_TOP_LIST = [500, 2000]
@@ -90,6 +94,10 @@ def run(merged_df: pd.DataFrame, *, seq: str, charge: int, terminus: str,
 
     pep = make_peptide(seq, charge, residual)
     parent_mass = pep.pep_mass
+    hook = None
+    if p["reconstruction_method"] != "unit":
+        from rbdp.annotation_adapter import RbdpAnnotationHook   # noqa: E402
+        hook = RbdpAnnotationHook(p["reconstruction_method"], p["rbdp_evidence"])
 
     ffc_dir = os.path.join(out_root, FFC_SUBDIR)
     os.makedirs(ffc_dir, exist_ok=True)
@@ -141,9 +149,18 @@ def run(merged_df: pd.DataFrame, *, seq: str, charge: int, terminus: str,
             converge=p["converge"],
             max_convergence_rounds=p["max_convergence_rounds"],
             loose_mock=p["loose_mock"], accept_ambiguity=p["accept_ambiguity"],
-            graph=p["graph"], graph_path=graph_path)
+            graph=p["graph"], graph_path=graph_path,
+            master_set_reconstruction_hook=hook)
 
         record["per_top"][n] = _summarise(table, all_lines)
+        if hook is not None:
+            rec = hook.records.get("".join(a.acid_name for a in pep.AA_array), {})
+            record["per_top"][n]["rbdp"] = {k: rec.get(k) for k in (
+                "requested_method", "effective_method", "status", "fallback_reason",
+                "selected_line", "union")}
+            _add_rbdp_sheet(line_path, rec)
+            from .artifacts import write_json_atomic
+            write_json_atomic(os.path.splitext(line_path)[0] + ".rbdp.json", rec)
         record["outputs"][f"line_based_top{n}"] = line_path
         if graph_path and os.path.isfile(graph_path):
             record["outputs"][f"graph_top{n}"] = graph_path
@@ -183,3 +200,27 @@ def _summarise(table, all_lines=None) -> dict:
                                  else recon.iloc[0]["reconstruction"])
         out["correct"] = "yes" if len(correct) else "no"
     return out
+
+
+def _add_rbdp_sheet(xlsx: str, rec: dict) -> None:
+    """Append the RBDP record (selection, anchors, before/after) to a workbook."""
+    from openpyxl import load_workbook
+    wb = load_workbook(xlsx)
+    ws = wb.create_sheet("rbdp")
+    ws.append(["REFERENCE-ASSISTED: coordinates are snapped to the known sequence"])
+    for k in ("requested_method", "effective_method", "status", "fallback_reason",
+              "selected_line", "evidence"):
+        ws.append([k, str(rec.get(k, ""))])
+    ws.append([])
+    ws.append(["anchor node", "coord", "x_side", "color H_X_b", "color H_X_y"])
+    for a in rec.get("anchors", []):
+        ws.append([a["node_id"], a["coord"], a["x_side"], a["color_H_X_b"], a["color_H_X_y"]])
+    ws.append([])
+    ws.append(["before #", "reconstruction (unit)", "correct"])
+    for r in rec.get("before", []):
+        ws.append([r["#"], r["reconstruction"], r["correct"]])
+    ws.append([])
+    ws.append(["after #", "reconstruction (RBDP)", "correct", "hypotheses"])
+    for r in rec.get("after", []):
+        ws.append([r["#"], r["reconstruction"], r["correct"], r.get("hypotheses", "")])
+    wb.save(xlsx)

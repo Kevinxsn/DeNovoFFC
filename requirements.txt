@@ -1,4 +1,4 @@
-# The Python side of DeNovoMMS.  The C++ engine needs none of this -- only a
+# The Python side of DeNovoFFC.  The C++ engine needs none of this -- only a
 # C++17 compiler.
 numpy>=1.24
 pandas>=1.5

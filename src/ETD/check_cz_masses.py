@@ -29,7 +29,7 @@ import cz_series  # noqa: E402
 from peptide import Pep  # noqa: E402
 from peptide_info import resolve as resolve_name  # noqa: E402
 
-INTENSITY = "/home/sux002/data/ETD_LLG/Intensity_Sum.LL37_ETD_Z6_1ms"
+INTENSITY = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "ETD_LLG/Intensity_Sum.LL37_ETD_Z6_1ms")
 NAME = "LLG_37_Z6_ETD"
 
 #: "c9 (+2)", "z.9 (+2)", "b2 (+1)", "y17 (+5) (1C13)" -- only the *first*

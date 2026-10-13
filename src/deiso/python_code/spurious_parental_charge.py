@@ -204,7 +204,7 @@ if __name__ == "__main__":
     from spurious_parental import merge_parental_annotations
 
     # ── Configuration ─────────────────────────────────────────────────────
-    DATA_PATH = "/home/sux002/data/deconvoluted/HAD_merged.tsv"
+    DATA_PATH = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "deconvoluted/HAD_merged.tsv")
 
     PEP_SEQ = "HADGSFSDEMNTILDNLAARDFINWLIQTKITD"
     CHARGE = 4

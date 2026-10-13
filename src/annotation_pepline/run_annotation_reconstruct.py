@@ -143,7 +143,7 @@ from peptide_info import resolve as resolve_name  # noqa: E402
 # ---------------------------------------------------------------------------
 # Where the .tsv tables live.
 # ---------------------------------------------------------------------------
-DATA_DIR = "/home/sux002/data/deconvoluted/merged"
+DATA_DIR = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "deconvoluted/merged")
 
 # ---------------------------------------------------------------------------
 # Output tree: result/annotation_reconstruct/{ffc_annotation, line_based/top{N},

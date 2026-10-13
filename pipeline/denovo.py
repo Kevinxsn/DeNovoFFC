@@ -2,14 +2,16 @@
 
 Two interchangeable engines behind one function:
 
-  ``cpp``     bin/denovo_mms, a port of the Python reference.  ~25x faster
+  ``cpp``     bin/denovo_ffc, a port of the Python reference.  ~25x faster
               end to end and the default whenever it has been built.
   ``python``  src/de_novo/denovo_core.py, the reference implementation.
 
-They are verified to agree on every reported quantity -- line categories,
-master-set coordinates to 1e-6 Da, convergence rounds, and the full set of
-tied reconstructions -- by ``tests/parity.py``.  If they ever disagree, the
-Python one is right by definition and the port has a bug.
+They are checked against each other on every reported quantity -- line
+categories, master-set coordinates to 1e-6 Da, convergence rounds, and the
+full set of tied reconstructions -- by ``tests/local/parity.py`` on the
+measured benchmark set and by the portable synthetic tests.  Agreement is
+established for the inputs those cover, not proven in general.  If they ever
+disagree, the Python one is right by definition and the port has a bug.
 """
 from __future__ import annotations
 
@@ -45,7 +47,45 @@ DEFAULTS = dict(
     max_rounds=20,
     max_paths=1000,
     label_tol=0.02,
+    # Final-graph and reconstruction settings.  Defaults reproduce the
+    # original behaviour exactly; the research RBDP benchmark used
+    # recon_sigma_scale=0.4 + presentation_order="informative", and that must
+    # be asked for explicitly -- enabling RBDP never tightens tolerances.
+    recon_sigma_scale=1.0,
+    presentation_order="enumeration",
+    reconstruction_method="unit",
+    rbdp_evidence="v2",
 )
+
+#: Settings that belong to the reconstruction stage, not to denovo_core's
+#: discovery keywords.
+_RECON_ONLY = ("reconstruction_method", "rbdp_evidence")
+
+METHODS = ("unit", "rbdp", "rbdp-guarded")
+ION_SERIES = ("auto", "by", "cz")
+
+
+def resolve_ion_series(fragmentation: str, ion_series: str = "auto") -> str:
+    """``auto`` -> ``by`` for HCD, ``cz`` for ETD/EThcD.  An explicit ``by`` on
+    an ETD/EThcD acquisition is a separate b/y analysis of the same table, not a
+    pooled reading of both ladders."""
+    frag = (fragmentation or "HCD").upper()
+    if ion_series not in ION_SERIES:
+        raise ValueError(f"ion series must be one of {ION_SERIES}, got {ion_series!r}")
+    series = ("by" if frag == "HCD" else "cz") if ion_series == "auto" else ion_series
+    if frag == "HCD" and series == "cz":
+        raise ValueError("an HCD acquisition has no c/z ladder; use ion series 'by'")
+    return series
+
+
+def validate_charge(precursor_charge: int, ion_series: str) -> None:
+    """A complementary pair is two detected fragments, each >= 1 charge: the
+    ladder budget is z (b/y) or z - 1 (c/z), and must be >= 2."""
+    need = 3 if ion_series == "cz" else 2
+    if int(precursor_charge) < need:
+        raise ValueError(
+            f"a {'c/z pair carries z-1 charges' if ion_series == 'cz' else 'b/y pair'}"
+            f"; the precursor charge must be >= {need}, got {precursor_charge}")
 
 #: ⚠ top-N is the DOMINANT hyper-parameter here and lower is cleaner
 #: (denovo.md 6): coverage keeps rising past 500 but wrong coordinates rise
@@ -69,7 +109,11 @@ def _cpp_flags(params: dict) -> list[str]:
          "--isotope-tol", str(params["isotope_tol_da"]),
          "--max-rounds", str(params["max_rounds"]),
          "--max-paths", str(params["max_paths"]),
-         "--label-tol", str(params["label_tol"])]
+         "--label-tol", str(params["label_tol"]),
+         "--recon-sigma-scale", repr(float(params["recon_sigma_scale"])),
+         "--presentation-order", params["presentation_order"],
+         "--reconstruction-method", params["reconstruction_method"],
+         "--rbdp-evidence", params["rbdp_evidence"]]
     if params["accept_ambiguity"]:          f.append("--accept-ambiguity")
     if not params["use_mocks"]:             f.append("--no-mocks")
     if not params["include_isotope_lines"]: f.append("--no-isotope-lines")
@@ -78,8 +122,9 @@ def _cpp_flags(params: dict) -> list[str]:
 
 
 def run_cpp(merged_df: pd.DataFrame, *, parent_charge: int, parent_mass: float,
-            terminus: str, fragmentation: str, top_n: int,
-            params: dict, engine: str) -> dict:
+            terminus: str, fragmentation: str, ion_series: str, top_n: int,
+            params: dict, engine: str, dataset_id: str = "data",
+            evidence_path: str | None = None) -> dict:
     """Run the C++ engine on an already-merged table."""
     with tempfile.TemporaryDirectory() as tmp:
         tsv = os.path.join(tmp, "map.tsv")
@@ -87,69 +132,109 @@ def run_cpp(merged_df: pd.DataFrame, *, parent_charge: int, parent_mass: float,
         merged_df.to_csv(tsv, sep="\t", index=False)
         cmd = [engine, "--data", tsv, "--charge", str(parent_charge),
                "--mass", f"{parent_mass:.10f}", "--terminus", terminus,
-               "--fragmentation", fragmentation, "--top-n", str(top_n),
+               "--fragmentation", fragmentation, "--ion-series", ion_series,
+               "--top-n", str(top_n), "--dataset-id", dataset_id,
                "--json", out, "--quiet"] + _cpp_flags(params)
+        if evidence_path:
+            cmd += ["--emit-evidence", evidence_path]
         proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode == 2:
+            # the engine's own convention: invalid input or a parity failure
+            from .artifacts import IntegrityError
+            msg = proc.stderr.strip()
+            if "parity" in msg:
+                raise IntegrityError(f"denovo_ffc: {msg}")
+            raise ValueError(f"denovo_ffc refused the input: {msg}")
         if proc.returncode != 0:
-            raise RuntimeError(f"denovo_mms failed:\n{proc.stderr.strip()}")
+            raise RuntimeError(f"denovo_ffc failed (exit {proc.returncode}):\n"
+                               f"{proc.stderr.strip()}")
         with open(out) as fh:
             return json.load(fh)
 
 
 def run_python(merged_df: pd.DataFrame, *, parent_charge: int,
                parent_mass: float, terminus: str, fragmentation: str,
-               top_n: int, params: dict) -> dict:
+               ion_series: str, top_n: int, params: dict) -> dict:
     """Run the Python reference and shape its result like the C++ JSON."""
     from denovo_core import run_denovo                          # noqa: E402
+    from . import artifacts
     paths.ensure_edges_json()
+    core = {k: v for k, v in params.items() if k not in _RECON_ONLY}
+    basis_frag = "ETD" if ion_series == "cz" else "HCD"
     res = run_denovo(prep.top_n(merged_df, top_n),
                      parent_charge=parent_charge, parent_mass=parent_mass,
-                     terminus=terminus, fragmentation=fragmentation, **params)
-    return {
-        "n_ffc": res.params["n_ffc"],
-        "fragmentation": res.basis.mode,
-        "line_charge": res.params["line_charge"],
-        "coord_total": res.total,
-        "coord_term": res.term,
-        "rounds": res.rounds,
-        "n_paths": res.n_paths,
-        "best_weight": res.best_weight,
-        "n_lines": len(res.lines),
-        "reconstructions": [r["reconstruction"] for r in res.reconstructions],
-        "master_set": [dict(coord=e.coord, sigma=e.sigma, n=e.n,
-                            best_rank=e.best_rank, kinds=e.kinds,
-                            origins=e.origins)
-                       for e in res.master.entries],
-        "paths": [[list(node) for node in path] for path in res.paths_raw],
-        "lines": [dict(key=li.key, i=li.i, j=li.j, mass=li.mass,
-                       a_shift=li.a_shift, category=li.category,
-                       detail=li.detail, n_ffc=li.n_ffc,
-                       n_inactive=li.n_inactive, eligible=li.eligible,
-                       n_banked=li.n_banked, unproductive=li.n_unproductive,
-                       unambiguous=li.n_unambiguous, ambiguous=li.n_ambiguous,
-                       mock=li.mock is not None, mock_refused=li.mock_refused)
-                  for li in res.lines],
-        "_engine": "python",
-    }
+                     terminus=terminus, fragmentation=basis_frag, **core)
+    method = params["reconstruction_method"]
+    report = override = None
+    if method != "unit":
+        from rbdp.runner import run as rbdp_run                 # noqa: E402
+        from rbdp.snapshot import freeze                        # noqa: E402
+        report, outcome = rbdp_run(freeze(res, params), method,
+                                   evidence=params["rbdp_evidence"],
+                                   max_paths=params["max_paths"])
+        if outcome["replace_paths"]:
+            ps = _order_paths(outcome["paths"], outcome["hypotheses"], res, params)
+            override = dict(paths=ps[0], hypotheses=ps[1], exact=outcome["exact"],
+                            optimum=outcome["optimum"],
+                            score_method=outcome["score_method"])
+        elif outcome["withhold_paths"]:
+            override = dict(paths=[], hypotheses=[], exact=0, optimum=-1.0,
+                            score_method=outcome["score_method"])
+    out = artifacts.python_result_to_dict(
+        res, top_n=top_n, acquisition_fragmentation=fragmentation.upper(),
+        ion_series=ion_series, precursor_charge=parent_charge,
+        neutral_mass=parent_mass, terminus=terminus, params=params, method=method,
+        rbdp_report=report, override_paths=override)
+    out["_engine"] = "python"
+    return out
+
+
+def _order_paths(paths_, hyps, res, params):
+    """Presentation order for an RBDP path set (same rule as the engine)."""
+    from denovo_core import _format_gapped_counts                # noqa: E402
+    if params["presentation_order"] != "informative":
+        return paths_, hyps
+    scored = []
+    for k, p in enumerate(paths_):
+        text, resolved, longest, gaps = _format_gapped_counts(
+            p, res.total, res.term, res.merge_tol, params["label_tol"])
+        scored.append((-resolved, -longest, gaps, text, [tuple(n) for n in p], k))
+    scored.sort()
+    return [paths_[s[5]] for s in scored], [hyps[s[5]] for s in scored]
 
 
 def run(merged_df: pd.DataFrame, *, parent_charge: int, parent_mass: float,
         terminus: str = "H2O", fragmentation: str = "HCD", top_n: int = 500,
-        engine: str = "auto", params: dict | None = None) -> dict:
+        engine: str = "auto", params: dict | None = None,
+        ion_series: str = "auto", dataset_id: str = "data",
+        evidence_path: str | None = None) -> dict:
     """Sequence one map de novo.  ``merged_df`` must already be merged."""
     p = dict(DEFAULTS, **(params or {}))
+    series = resolve_ion_series(fragmentation, ion_series)
+    validate_charge(parent_charge, series)
+    if p["reconstruction_method"] not in METHODS:
+        raise ValueError(f"reconstruction method must be one of {METHODS}")
+    if p["reconstruction_method"] != "unit" and series != "by":
+        raise ValueError("RBDP is validated for single-series HCD b/y only; it is "
+                         "not available for the c/z series (use 'unit')")
+    if not (p["recon_sigma_scale"] > 0):
+        raise ValueError("recon_sigma_scale must be positive")
     if engine in ("auto", "cpp"):
         exe = paths.cpp_engine(required=(engine == "cpp"))
         if exe:
             out = run_cpp(merged_df, parent_charge=parent_charge,
                           parent_mass=parent_mass, terminus=terminus,
-                          fragmentation=fragmentation, top_n=top_n,
-                          params=p, engine=exe)
+                          fragmentation=fragmentation, ion_series=series,
+                          top_n=top_n, params=p, engine=exe,
+                          dataset_id=dataset_id, evidence_path=evidence_path)
             out["_engine"] = "cpp"
             return out
+    if evidence_path:
+        raise ValueError("evidence export (--emit-evidence) needs the C++ engine")
     return run_python(merged_df, parent_charge=parent_charge,
                       parent_mass=parent_mass, terminus=terminus,
-                      fragmentation=fragmentation, top_n=top_n, params=p)
+                      fragmentation=fragmentation, ion_series=series,
+                      top_n=top_n, params=p)
 
 
 def write_detail(result: dict, path: str) -> None:

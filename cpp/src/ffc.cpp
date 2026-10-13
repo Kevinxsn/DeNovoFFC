@@ -58,8 +58,10 @@ FfcTable read_ffc_table(const std::string& path, const std::string& col_a,
 
     FfcTable t;
     std::string line;
+    long data_row = -1;
     while (std::getline(in, line)) {
-        if (line.empty()) continue;
+        if (line.empty() || line == "\r") continue;
+        ++data_row;
         const auto f = split(line, sep);
         if (static_cast<int>(f.size()) <= std::max(ia, ib)) continue;
         const std::string sa = trim(f[ia]), sb = trim(f[ib]);
@@ -75,6 +77,7 @@ FfcTable read_ffc_table(const std::string& path, const std::string& col_a,
         t.mz_a.push_back(a);
         t.mz_b.push_back(b);
         t.ranking.push_back(rank);
+        t.row.push_back(data_row);
     }
     return t;
 }
@@ -94,10 +97,12 @@ FfcTable prepare(const FfcTable& in, int top_n) {
     out.mz_a.reserve(order.size());
     out.mz_b.reserve(order.size());
     out.ranking.reserve(order.size());
+    out.row.reserve(order.size());
     for (size_t k : order) {
         out.mz_a.push_back(in.mz_a[k]);
         out.mz_b.push_back(in.mz_b[k]);
         out.ranking.push_back(in.ranking[k]);
+        out.row.push_back(in.row.empty() ? static_cast<long>(k) : in.row[k]);
     }
     return out;
 }

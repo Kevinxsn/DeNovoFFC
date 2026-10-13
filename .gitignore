@@ -1,9 +1,11 @@
 __pycache__/
 *.py[cod]
+.venv/
 
 # Build output
 cpp/build/
-bin/denovo_mms
+bin/denovo_ffc
+bin/denovo_tests
 
 # Generated, not committed: 114 MB, and rebuilt in ~30 s (Python) or ~80 ms (C++)
 src/reconstruct/edges.json
@@ -11,3 +13,10 @@ src/reconstruct/edges.json
 # Default output tree
 result/
 *.log
+
+# Local design notes; not for publication
+/docs/
+
+# Local benchmark manifest (private data locations, truth, expectations)
+/benchmarks/local_manifest.json
+/benchmarks/results/

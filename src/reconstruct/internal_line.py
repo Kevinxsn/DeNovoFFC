@@ -1,5 +1,5 @@
 """
-line_alignment.py — Step 1 of internal-line incorporation for DeNovoMMS.
+line_alignment.py — Step 1 of internal-line incorporation for DeNovoFFC.
 
 Goal of this first step
 -----------------------
@@ -17,7 +17,7 @@ decide how that TFFC relates to the parental line:
     unambiguous    — active, and exactly one virtual candidate is good.
     ambiguous      — active, and both virtual candidates are good.
 
-A virtual TFFC is *good* (per DeNovoMMS) iff adding it to the spectrum
+A virtual TFFC is *good* (per DeNovoFFC) iff adding it to the spectrum
 strictly increases the weight of the heaviest source->sink path in the
 2D-spectrum graph.  Here every graph edge has weight 1, so "weight" is the
 edge count returned by ``path_finding.find_all_longest_paths``.

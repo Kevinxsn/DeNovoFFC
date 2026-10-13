@@ -25,8 +25,11 @@ struct Entry {
     int    n = 1;                       // independent TFFCs merged in
     bool   all_mock = true;             // every contributing kind was "mock"
     int    best_rank = -1;              // best (lowest) supporting FFC ranking
-    std::vector<std::string> origins;   // which line proposed it
+    std::vector<std::string> origins;   // which line proposed it (display key)
     std::vector<std::string> kinds;
+    //: The same proposals as indices into Result::lines -- a stable identity.
+    //: The display key is NOT one: two lines can share "(i,j) A=x.xxx".
+    std::vector<int> origin_lines;
 };
 
 // (sorted coords, their sigmas, their weights) -- the triple every DAG build
@@ -63,7 +66,7 @@ public:
 
     // Returns true if the breakpoint was genuinely new.
     bool add(double coord, double sigma, const std::string& kind = "observed",
-             const std::string& origin = "", int rank = -1);
+             const std::string& origin = "", int rank = -1, int origin_line = -1);
 
     View view(const std::vector<Candidate>& extra = {}) const;
 

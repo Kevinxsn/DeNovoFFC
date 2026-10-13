@@ -1,8 +1,8 @@
-"""DeNovoMMS -- MMS (2D fragment-fragment correlation) peptide sequencing.
+"""DeNovoFFC -- MMS (2D fragment-fragment correlation) peptide sequencing.
 
 Two routes through one set of stages, chosen by whether the peptide is known:
 
-    unknown peptide   [deconvolution] -> de novo MMS
+    unknown peptide   [deconvolution] -> de novo FFC
     known peptide     [deconvolution] -> annotation pipeline
                                          (which runs de novo internally)
 

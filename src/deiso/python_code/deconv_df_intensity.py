@@ -396,8 +396,9 @@ def deconvolute_pairs(df: pd.DataFrame,
 # main
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    data_path = "/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/HAD4+_with_intensity"
-    save_path = "/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/deconv/"
+    import os  # [DeNovoFFC] example data root: $DENOVOFFC_DATA_ROOT
+    data_path = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "data/long_peptide/HAD4+_with_intensity")
+    save_path = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "data/long_peptide/deconv/")
 
     #df = pd.read_csv(data_path, sep=r"\s+", skiprows=1, header=None, engine="python")
     df = pd.read_csv(data_path, sep="\t", skiprows=1, header=None, engine="python")

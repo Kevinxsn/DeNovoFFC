@@ -238,7 +238,8 @@ def run_line_based_reconstruct(merged_df, pep, charge, parent_mass, top_n,
                                master_align_threshold=1,
                                converge=True, max_convergence_rounds=20,
                                loose_mock=False, accept_ambiguity=False,
-                               graph=False, graph_path=None):
+                               graph=False, graph_path=None,
+                               master_set_reconstruction_hook=None):   # [DeNovoFFC]
     """Analysis 3 (v2) -- line-based internal annotation with de novo
     reconstruction reporting (line_internal_annotation_oa_v2). Writes
     ``output_path`` (.xlsx) and returns ``(coverage_table, all_lines)``.
@@ -361,6 +362,7 @@ def run_line_based_reconstruct(merged_df, pep, charge, parent_mass, top_n,
         accept_ambiguity=accept_ambiguity,
         graph=graph,
         graph_path=graph_path,
+        master_set_reconstruction_hook=master_set_reconstruction_hook,  # [DeNovoFFC]
     )
     print(f"Detected lines: {len(all_lines)}")
 
@@ -585,7 +587,7 @@ if __name__ == "__main__":
     # Xiaowen pipeline writes <NAME>_XIAOWEN_merged.tsv; the older run_deconv_test
     # wrote <NAME>_merged.tsv.  Prefer the Xiaowen one, fall back to the plain
     # one.  Override with DATA_PATH=... in the environment for anything else.
-    _MERGED_DIR = "/home/sux002/data/deconvoluted/merged"
+    _MERGED_DIR = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "deconvoluted/merged")
     DATA_PATH = os.environ.get("DATA_PATH")
     if DATA_PATH is None:
         candidates = [

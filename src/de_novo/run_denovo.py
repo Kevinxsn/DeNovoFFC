@@ -20,7 +20,7 @@ Pass ``--no-score`` to run with no sequence in play at all.
 
 Usage
 -----
-    PY=/home/sux002/miniforge3/envs/2d_spec/bin/python
+    PY=python
 
     $PY run_denovo.py                          # all 7, default top-N list
     $PY run_denovo.py --only VEA3+ KWK5+
@@ -63,9 +63,9 @@ from merge_ffcs import merge_duplicate_ffcs_charge      # noqa: E402
 from line_finding import prepare_ffc_data               # noqa: E402
 from denovo_core import run_denovo, TERMINI             # noqa: E402
 
-DATA_DIR = "/home/sux002/data/deconvoluted/merged"
+DATA_DIR = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "deconvoluted/merged")
 #: ETD/EThcD maps, deconvolved with the line model at z-1 (``ETD/etd.md`` §2b).
-ETD_DATA_DIR = "/home/sux002/data/ETD_deconv_cz/merge"
+ETD_DATA_DIR = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "ETD_deconv_cz/merge")
 OUT_DIR = os.path.join(_HERE, "result")
 
 #: LL37, the peptide the ETD data was acquired on (``ETD/etd.md`` §1).

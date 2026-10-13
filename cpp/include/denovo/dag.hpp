@@ -52,6 +52,9 @@ double heaviest_weight(const Dag& g, const std::vector<double>& weights_by_coord
 double heaviest_paths(const Dag& g, const std::vector<double>& weights_by_coord,
                       int max_paths, std::vector<Path>& out);
 
+// weights.get(coord, 1.0), lifted onto the DAG's coordinate index.
+std::vector<double> weights_on(const Dag& g, const View& v);
+
 // The evaluator with a cache, keyed on the rounded (coords, sigmas, weights)
 // triple exactly as the reference's Scorer is -- different TFFCs frequently
 // propose the same breakpoint, so this pays for itself many times over.

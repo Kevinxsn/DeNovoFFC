@@ -986,14 +986,18 @@ def _master_set_reconstruction(
     hero, others = None, []                       # [CZ] for the 2D map
     try:
         pf.SOURCE_NODE = (0.0, term)              # rebase for this call
-        graph = pf.build_adjacency_graph(
+        # [DeNovoFFC] The DAG used to be bound to a local named ``graph``,
+        # shadowing the ``graph: bool`` parameter, so the figure below was drawn
+        # whenever a correct path existed -- and, without a path, written to
+        # ./master_set_reconstruction.png.  Renamed; the flag now decides.
+        adjacency = pf.build_adjacency_graph(
             nodes=pf.construct_graph_nodes(lower_half),
             allowed_masses=load_edges(edges_path),
             total_peptide_mass=total,
             threshold=threshold,
         )
         max_len, all_paths = pf.find_all_longest_paths(
-            graph, start_node=pf.SOURCE_NODE, max_paths=max_paths)
+            adjacency, start_node=pf.SOURCE_NODE, max_paths=max_paths)
         if max_len == -1 or not all_paths:
             return 0, False, []
         rows = []
@@ -1019,6 +1023,8 @@ def _master_set_reconstruction(
     # Ticks are named c{k} / z{n-k}; `total` here is TOTAL_STAR, the same basis
     # every coordinate on the figure is on.
     if graph and hero is not None:
+        if not graph_path:                                       # [DeNovoFFC]
+            raise ValueError("graph=True needs an explicit graph_path")
         ion_labels = {}
         for k in bonds:
             if 0 < k < n:
@@ -1026,7 +1032,7 @@ def _master_set_reconstruction(
                 ion_labels[total - prefix[k]] = f"z{n - k}"
         _draw_reconstruction_graph(
             lower_half, hero, others, list(incorrect_coords), ion_labels,
-            total, graph_path or "master_set_reconstruction.png", graph_title)
+            total, graph_path, graph_title)                      # [DeNovoFFC]
 
     return len(rows), any(r["correct"] for r in rows), rows
 
@@ -1883,6 +1889,7 @@ def coverage_table_internal(
     graph: bool = False,                      # [CZ]
     graph_path: Optional[str] = None,         # [CZ]
     graph_title: str = "",                    # [CZ]
+    tffc_analysis_hook=None,                  # [DeNovoFFC]
 ) -> pd.DataFrame:
     """Bond-by-bond coverage table keyed by ``(i, j, shift)`` with explicit
     internal-ion labels.
@@ -2407,7 +2414,11 @@ def coverage_table_internal(
             bond_label = entry[2]
             return bond_label is None or bond_label not in master_rows
 
-        cells, cells_final, (bond_sources, incorrect_coords), _eligible = _tffc_analysis(
+        # [DeNovoFFC] An explicit hook replaces the research tree's habit of
+        # swapping the module-level function (combining_*/_CaptureTffc):
+        # same call, same arguments, no global state touched.
+        _tffc = tffc_analysis_hook or _tffc_analysis       # [DeNovoFFC]
+        cells, cells_final, (bond_sources, incorrect_coords), _eligible = _tffc(
             pep, col_ffcs, col_order, parental_set,
             _is_active, lambda c: inactive_map.get(c) or 0,
             master_align_threshold=master_align_threshold,
@@ -2860,10 +2871,7 @@ if __name__ == "__main__":
 
     # ── Configuration (HAD, charge 4 -- matches 4+.xlsx) ───────────────────
     #DATA_PATH = os.path.join(_DEISO, "result", "HAD_merged.tsv")
-    #DATA_PATH = "/home/sux002/data/deconvoluted/LLG_37_Z6_E30_I130_merged.tsv"
-    #DATA_PATH = "/home/sux002/data/deconvoluted/VEA_15_Z3_revised_merged.tsv"
-    #DATA_PATH = "/home/sux002/projects/2D_spec_dict/deiso/python_code/result/YLE_merged.tsv"
-    DATA_PATH = '/home/sux002/data/deconvoluted/merged/KWK_37_Z5_E28_2_XIAOWEN_merged.tsv'
+    DATA_PATH = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "deconvoluted/merged/KWK_37_Z5_E28_2_XIAOWEN_merged.tsv")
     
     #PEP_SEQ = "VEADIAGHGQEVLIR"
     #PEP_SEQ = "LLGDFFRKSKEKIGKEFKRIVQRIKDFLRNLVPRTES"

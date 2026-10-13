@@ -11,6 +11,7 @@
 #include <string>
 #include <stdexcept>
 #include <algorithm>
+#include <cmath>
 
 namespace denovo {
 
@@ -84,8 +85,18 @@ struct Basis {
     // precursor's protons, so a c/z pair from [M+6H]6+ carries five charges.
     // The ladder then sits at the same mass on a different charge sum and the
     // parental pass (i + j == parent_charge) cannot see it.
+    //
+    // A complementary pair is two DETECTED fragments, each carrying at least
+    // one charge, so the budget must be >= 2.  The reference used to clamp an
+    // impossible budget up to 2 silently; it is now an input error.
     int line_charge(int parent_charge) const {
-        return std::max(parent_charge + charge_offset, 2);
+        const int z = parent_charge + charge_offset;
+        if (z < 2)
+            throw std::invalid_argument(
+                "precursor charge " + std::to_string(parent_charge) + " leaves a " +
+                mode + " ladder charge budget of " + std::to_string(z) +
+                "; a complementary pair needs >= 2 (b/y: z >= 2, c/z: z >= 3)");
+        return z;
     }
 };
 
@@ -116,6 +127,25 @@ inline Basis make_basis(const std::string& fragmentation, double parent_mass,
 // Fold a breakpoint coordinate into the lower half (0, total/2].
 inline double fold(double r, double total) {
     return (r <= total - r) ? r : total - r;
+}
+
+// ([M+H]+ mass of one FFC side) -> (folded coordinate, sigma).
+//
+// ⚠ Two things happen here and they must not be confused.  The COORDINATE is
+// on the fragmentation's basis (strip the proton, strip side_nh3, fold).
+// SIGMA is referenced to the mass that was actually MEASURED -- never to the
+// folded coordinate and never to the basis-shifted one.  The coordinate may
+// sit tens of Da away (c/z) or on the far side of the peptide (a mirrored
+// side), but the error travels with the measurement.  Mirroring additionally
+// inherits whatever uncertainty the precursor mass carries.
+inline void coord_from_side(double ion_mass, const Basis& b, double tol_ppm,
+                            double precursor_ppm, double& coord, double& sigma) {
+    const double m_meas = ion_mass - PROTON;
+    const double u = m_meas - b.side_nh3;
+    const double sig = std::fabs(m_meas) * tol_ppm * 1e-6;
+    const double ct = b.coord_total();
+    if (u <= ct - u) { coord = u; sigma = sig; }
+    else { coord = ct - u; sigma = sig + b.total * precursor_ppm * 1e-6; }
 }
 
 }  // namespace denovo

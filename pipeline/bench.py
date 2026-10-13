@@ -6,11 +6,11 @@ engine cannot -- scoring happens strictly *after* a result exists, here.  That
 separation is the thing that makes "no ground truth in the pipeline" checkable
 rather than merely claimed.
 
-The seven peptides are `annotation_pipeline.md` 5's reference set; their
-sequences are used for exactly two things, both outside the algorithm: to
-derive the precursor neutral mass (an experiment measures this; deriving it
-keeps the benchmark from being hostage to a separate mass file), and to grade
-the answer afterwards.
+The peptides come from the LOCAL benchmark manifest (pipeline/local_bench.py;
+not part of the public source).  Their sequences are used for exactly two
+things, both outside the algorithm: the precursor neutral mass is
+reference-derived from them (and labelled so), and the answer is graded
+against them afterwards.
 """
 from __future__ import annotations
 
@@ -19,12 +19,14 @@ import time
 
 import pandas as pd
 
-from . import denovo, paths, prep
-from run_denovo import (MAIN_PEPTIDES, ETD_PEPTIDES, ALL_PEPTIDES,  # noqa: E402
-                        DATA_DIR, precursor_mass)
+from . import denovo, local_bench, paths, prep
 import evaluate                                                     # noqa: E402
 
-SETS = {"main": MAIN_PEPTIDES, "etd": ETD_PEPTIDES, "all": ALL_PEPTIDES}
+
+def _sets() -> dict:
+    s = local_bench.load("sets")
+    return {"main": s.get("main", []), "etd": s.get("etd", []),
+            "all": s.get("main", []) + s.get("etd", [])}
 
 
 class _ResultAdapter:
@@ -68,28 +70,33 @@ class _ResultAdapter:
 def run(names=None, which: str = "main", top_list=None, engine: str = "auto",
         output_dir: str | None = None, params: dict | None = None,
         detail: bool = True, verbose: bool = False) -> pd.DataFrame:
-    peptides = SETS[which]
+    try:
+        sets = _sets()
+    except local_bench.Unavailable as exc:
+        print(f"benchmark data unavailable: {exc}")
+        return pd.DataFrame()
+    peptides = sets[which]
     if names:
         wanted = set(names)
         peptides = [e for e in peptides if e["name"] in wanted]
         missing = wanted - {e["name"] for e in peptides}
         if missing:
             raise SystemExit(f"unknown peptide(s): {sorted(missing)}.  "
-                             f"Known: {[e['name'] for e in SETS['all']]}")
+                             f"Known: {[e['name'] for e in sets['all']]}")
     top_list = list(top_list or denovo.DEFAULT_TOP_LIST)
     out_root = os.path.abspath(output_dir or "result/benchmark")
     os.makedirs(out_root, exist_ok=True)
 
     rows = []
     for entry in peptides:
-        data_dir = entry.get("data_dir", DATA_DIR)
-        path = os.path.join(data_dir, entry["data"])
-        if not os.path.isfile(path):
-            print(f"{entry['name']:<12} SKIP  (no {path})")
+        try:
+            path = local_bench.check_file(entry)
+        except local_bench.Unavailable as exc:
+            print(f"{entry['name']:<12} SKIP  ({exc})")
             continue
 
-        seq, terminus = entry["seq"], entry["terminus"]
-        mass = entry.get("mass") or precursor_mass(seq, terminus)
+        seq, terminus = entry["truth"], entry["terminus"]
+        mass = entry["mass"]                    # reference-derived (manifest says so)
         merged = prep.merge(prep.read_table(path), "denovo")
 
         for n in top_list:

@@ -624,5 +624,5 @@ if __name__ == "__main__":
         aa_map=aa_map,
         pep_mass=628.40,
         title="VEA3+  •  Spurious Impact Analysis",
-        save_path="/home/claude/demo_spurious.png",
+        save_path="demo_spurious.png",
     )

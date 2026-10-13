@@ -246,6 +246,8 @@ std::string cache_key(const View& v) {
     return k;
 }
 
+}  // namespace
+
 // weights.get(coord, 1.0), lifted onto the DAG's coordinate index.
 std::vector<double> weights_on(const Dag& g, const View& v) {
     std::map<double, double> m;
@@ -257,7 +259,6 @@ std::vector<double> weights_on(const Dag& g, const View& v) {
     }
     return w;
 }
-}  // namespace
 
 double Scorer::score(const View& v) {
     const std::string key = cache_key(v);

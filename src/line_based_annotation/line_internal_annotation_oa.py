@@ -1288,10 +1288,7 @@ if __name__ == "__main__":
 
     # ── Configuration (HAD, charge 4 -- matches 4+.xlsx) ───────────────────
     #DATA_PATH = os.path.join(_DEISO, "result", "HAD_merged.tsv")
-    #DATA_PATH = "/home/sux002/data/deconvoluted/LLG_37_Z6_E30_I130_merged.tsv"
-    #DATA_PATH = "/home/sux002/data/deconvoluted/VEA_15_Z3_revised_merged.tsv"
-    #DATA_PATH = "/home/sux002/projects/2D_spec_dict/deiso/python_code/result/YLE_merged.tsv"
-    DATA_PATH = '/home/sux002/data/deconvoluted/merged/KWK_37_Z5_E28_2_XIAOWEN_merged.tsv'
+    DATA_PATH = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "deconvoluted/merged/KWK_37_Z5_E28_2_XIAOWEN_merged.tsv")
     
     #PEP_SEQ = "VEADIAGHGQEVLIR"
     #PEP_SEQ = "LLGDFFRKSKEKIGKEFKRIVQRIKDFLRNLVPRTES"

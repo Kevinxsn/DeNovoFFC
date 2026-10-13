@@ -658,5 +658,5 @@ if __name__ == "__main__":
         ion_labels=ion_labels,
         pep_mass=628.40,
         title="VEA3+  •  Ion-Annotated Axes",
-        save_path="/home/claude/demo_ion_labels.png",
+        save_path="demo_ion_labels.png",
     )

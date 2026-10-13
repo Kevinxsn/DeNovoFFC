@@ -68,7 +68,7 @@ import ffc_annotator  # noqa: E402
 import line_internal_annotation_oa_v2  # noqa: E402
 
 
-DATA_DIR = "/home/sux002/data/ETD_deconv_cz/merge"
+DATA_DIR = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "ETD_deconv_cz/merge")
 OUTPUT_DIR = os.path.join(_HERE, "result")
 
 #: Matches ``run_annot_rec.sh``, the author's working configuration for the

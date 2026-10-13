@@ -70,8 +70,8 @@ from peptide_info import resolve as resolve_name  # noqa: E402
 from deconv_pipeline_oa import run_deconvolution  # noqa: E402
 
 
-DATA_DIR = "/home/sux002/data/ETD_prep"
-OUTPUT_DIR = "/home/sux002/data/ETD_deconv_cz"
+DATA_DIR = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "ETD_prep")
+OUTPUT_DIR = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "ETD_deconv_cz")
 
 #: Same defaults as ``deconvolution/run_deconvolution.py``; see deconvolution.md
 #: section 7 for why each one is what it is.  Nothing here is ETD-specific --

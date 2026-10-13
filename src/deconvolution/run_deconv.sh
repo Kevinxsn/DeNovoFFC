@@ -20,7 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(dirname "$SCRIPT_DIR")"
 
 # The 2d_spec conda env; the system python may lack numpy/scipy.
-PYTHON=${PYTHON:-/home/sux002/miniforge3/envs/2d_spec/bin/python}
+PYTHON=${PYTHON:-python}
 
 # TopFD's shared libraries.  run_deconvolution.py also passes this per
 # invocation, so either entry point works -- this is for running topfd by hand.

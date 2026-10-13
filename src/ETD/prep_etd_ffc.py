@@ -4,7 +4,7 @@ ETD/EThcD data prep -- block-format covariance file -> flat FFC table + intensit
 ================================================================================
 
 The ETD_LLG dataset arrives in a *different* file layout from everything under
-``/home/sux002/data/original_mms/``.  This script converts it to the flat table
+``$DENOVOFFC_DATA_ROOT/original_mms/``.  This script converts it to the flat table
 the deconvolution expects, so nothing downstream has to know about the
 difference.
 
@@ -75,7 +75,7 @@ Usage
 -----
     python prep_etd_ffc.py                                   # everything in --raw-dir
     python prep_etd_ffc.py --list                            # show what would run
-    python prep_etd_ffc.py --raw-dir /home/sux002/data/ETD_LLG_more_data
+    python prep_etd_ffc.py --raw-dir $DENOVOFFC_DATA_ROOT/ETD_LLG_more_data
     python prep_etd_ffc.py --only LLG_37_Z6_ETD
 
 Datasets are **auto-discovered**: every ``Covariance_Data.X`` with a matching
@@ -97,8 +97,12 @@ import numpy as np
 import pandas as pd
 
 
-RAW_DIR = "/home/sux002/data/ETD_LLG"
-OUT_DIR = "/home/sux002/data/ETD_prep"
+# [DeNovoFFC] The research defaults pointed at one author's data directories;
+# a public installation has none, so both directories are now required
+# arguments.  The generic, single-file entry point is ``denovoffc prepare``
+# (pipeline/prepare.py -> ``prepare_blocked`` below).
+RAW_DIR = None
+OUT_DIR = None
 
 #: Explicit NAME -> (covariance file, intensity file) overrides.  Anything not
 #: listed here is auto-discovered by ``discover()`` below; these two are pinned
@@ -303,10 +307,203 @@ def convert(name: str, cov_path: str, int_path: str, out_path: str,
             "missing_intensity": n_missing, "path": out_path}
 
 
+# =============================================================================
+# [DeNovoFFC] Generic streaming preparation of ONE explicit file pair
+# =============================================================================
+# ``read_blocked_covariance`` above loads the whole export into a DataFrame,
+# which some inputs (tens of millions of rows) cannot afford, and it needs the
+# dataset-name machinery of ``discover``.  ``prepare_blocked`` streams blocks
+# straight to the output, validates everything the layout promises, and never
+# makes a lossy top-N cut: deconvolution and scoring want different row sets.
+
+PREP_FORMAT_VERSION = 1
+
+
+class BlockedFormatError(ValueError):
+    """The covariance export does not have the documented blocked layout."""
+
+
+def read_peak_table(path: str) -> list:
+    """``Intensity_Sum.*`` -> ``[(mz, mz_token, intensity_token), ...]`` in file
+    order; row k is peak k+1.  Only the first three fields are parsed (the
+    annotation may contain spaces)."""
+    out = []
+    with open(path) as fh:
+        for lineno, line in enumerate(fh, start=1):
+            parts = line.split(None, 3)
+            if not parts:
+                continue
+            if len(parts) < 2:
+                raise BlockedFormatError(f"{path}:{lineno}: expected 'intensity m/z ...'")
+            try:
+                mz = float(parts[1])
+                float(parts[0])
+            except ValueError:
+                raise BlockedFormatError(f"{path}:{lineno}: non-numeric intensity/m/z") from None
+            out.append((mz, parts[1], parts[0]))
+    return out
+
+
+def _num(tok: str, path: str, lineno: int, what: str) -> float:
+    try:
+        v = float(tok)
+    except ValueError:
+        raise BlockedFormatError(f"{path}:{lineno}: {what} is not a number: {tok!r}") from None
+    if v != v:
+        raise BlockedFormatError(f"{path}:{lineno}: {what} is NaN")
+    return v
+
+
+def prepare_blocked(cov_path: str, out_path: str, int_path: str = None,
+                    mz_atol: float = 1e-6, covariance_alias: bool = True) -> dict:
+    """Stream ``cov_path`` (blocked, upper-triangular) to a flat FFC table.
+
+    Layout: a peak count, then for every peak ``i`` a block header
+    ``(i, m/z, n_partners)`` followed by ``n_partners`` rows
+    ``(j, m/z, Partial Cov., Score, Ranking)`` with ``j > i``.
+
+    * The third partner field is PARTIAL covariance.  The export has no
+      ordinary covariance; with ``covariance_alias`` a ``Covariance`` column
+      copying Partial Cov. is written for downstream code that expects the
+      column, and the summary records it as a synthesized alias.
+    * Intensities are joined by validated peak INDEX (row k of the intensity
+      file is peak k+1) and the m/z of both files must agree -- never a
+      nearest-m/z join.
+    * Block sizes, index order (1..N, no gaps, no duplicates), triangular
+      orientation, numeric fields and partner m/z are all checked; any failure
+      raises ``BlockedFormatError`` and the partial output is removed.
+    * Original rankings are passed through untouched, gaps and all.
+
+    Returns a summary dict (row counts, missing values, ranges).
+    """
+    peaks = read_peak_table(int_path) if int_path else None
+    header_mz = {}                      # index -> m/z (only without a peak table)
+    pending_partner = {}                # j -> partner m/z first seen (no peak table)
+    cols = ["m/z A", "m/z B"] + (["Covariance"] if covariance_alias else []) + \
+           ["Partial Cov.", "Score", "Ranking", "intensity A", "intensity B"]
+    n_rows = n_blocks = n_missing_int = n_nonpos_pcov = 0
+    rank_min = rank_max = None
+    tmp = out_path + ".partial"
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
+    try:
+        with open(cov_path) as fin, open(tmp, "w") as fout:
+            fout.write("\t".join(cols) + "\n")
+            first = fin.readline()
+            try:
+                n_peaks = int(first.split()[0])
+            except (ValueError, IndexError):
+                raise BlockedFormatError(f"{cov_path}:1: expected the peak count") from None
+            if peaks is not None and len(peaks) != n_peaks:
+                raise BlockedFormatError(
+                    f"intensity file has {len(peaks)} peaks but the covariance file "
+                    f"declares {n_peaks}; the index join is not valid")
+            cur_i, cur_mz_tok, cur_int, expected, got = 0, None, "", 0, 0
+            lineno = 1
+            for line in fin:
+                lineno += 1
+                f = line.split()
+                if not f:
+                    continue
+                if len(f) == 3:                                  # block header
+                    if got != expected:
+                        raise BlockedFormatError(
+                            f"{cov_path}:{lineno}: block {cur_i} declared {expected} "
+                            f"partners but has {got}")
+                    try:
+                        i = int(f[0])
+                        n_part = int(f[2])
+                    except ValueError:
+                        raise BlockedFormatError(f"{cov_path}:{lineno}: bad block header") from None
+                    if i != cur_i + 1:
+                        raise BlockedFormatError(
+                            f"{cov_path}:{lineno}: block {i} follows block {cur_i}; "
+                            "headers must be peaks 1..N in order, without gaps or repeats")
+                    if i > n_peaks:
+                        raise BlockedFormatError(f"{cov_path}:{lineno}: block {i} > {n_peaks} peaks")
+                    mz = _num(f[1], cov_path, lineno, "block m/z")
+                    if peaks is not None:
+                        if abs(peaks[i - 1][0] - mz) > mz_atol:
+                            raise BlockedFormatError(
+                                f"{cov_path}:{lineno}: peak {i} m/z {mz} != intensity file "
+                                f"{peaks[i - 1][0]}")
+                        cur_int = peaks[i - 1][2]
+                    else:
+                        header_mz[i] = mz
+                        if i in pending_partner and abs(pending_partner.pop(i) - mz) > mz_atol:
+                            raise BlockedFormatError(
+                                f"{cov_path}:{lineno}: partner m/z of peak {i} disagrees "
+                                "with its block header")
+                    cur_i, cur_mz_tok, expected, got = i, f[1], n_part, 0
+                    n_blocks += 1
+                    continue
+                if len(f) != 5:
+                    raise BlockedFormatError(f"{cov_path}:{lineno}: expected 3 or 5 fields, "
+                                             f"got {len(f)}")
+                if cur_i == 0:
+                    raise BlockedFormatError(f"{cov_path}:{lineno}: partner row before any block")
+                try:
+                    j = int(f[0])
+                    rank = int(f[4])
+                except ValueError:
+                    raise BlockedFormatError(f"{cov_path}:{lineno}: bad partner index/ranking") from None
+                if not (cur_i < j <= n_peaks):
+                    raise BlockedFormatError(
+                        f"{cov_path}:{lineno}: partner {j} of peak {cur_i} breaks the "
+                        "upper-triangular layout (need i < j <= N)")
+                mzb = _num(f[1], cov_path, lineno, "partner m/z")
+                pcov = _num(f[2], cov_path, lineno, "Partial Cov.")
+                _num(f[3], cov_path, lineno, "Score")
+                if peaks is not None:
+                    if abs(peaks[j - 1][0] - mzb) > mz_atol:
+                        raise BlockedFormatError(
+                            f"{cov_path}:{lineno}: partner {j} m/z {mzb} != intensity file "
+                            f"{peaks[j - 1][0]}")
+                    int_b = peaks[j - 1][2]
+                else:
+                    prev = pending_partner.setdefault(j, mzb)
+                    if abs(prev - mzb) > mz_atol:
+                        raise BlockedFormatError(f"{cov_path}:{lineno}: peak {j} listed "
+                                                 "with two different m/z values")
+                    int_b = ""
+                if peaks is None:
+                    n_missing_int += 1
+                n_nonpos_pcov += pcov <= 0
+                rank_min = rank if rank_min is None else min(rank_min, rank)
+                rank_max = rank if rank_max is None else max(rank_max, rank)
+                row = [cur_mz_tok, f[1]] + ([f[2]] if covariance_alias else []) + \
+                      [f[2], f[3], f[4], cur_int, int_b]
+                fout.write("\t".join(row) + "\n")
+                got += 1
+                n_rows += 1
+            if got != expected:
+                raise BlockedFormatError(f"{cov_path}: last block {cur_i} declared {expected} "
+                                         f"partners but has {got}")
+            if n_blocks != n_peaks:
+                raise BlockedFormatError(f"{cov_path}: header declares {n_peaks} peaks, "
+                                         f"found {n_blocks} blocks")
+            if pending_partner:
+                raise BlockedFormatError(f"{cov_path}: partner peak(s) never declared: "
+                                         f"{sorted(pending_partner)[:5]}")
+        os.replace(tmp, out_path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    return dict(format_version=PREP_FORMAT_VERSION, n_peaks=n_peaks, n_ffc_rows=n_rows,
+                columns=cols, covariance_column=("synthesized alias of Partial Cov."
+                                                 if covariance_alias else "absent"),
+                partial_cov_column="Partial Cov. (third partner field)",
+                missing_intensity_rows=n_missing_int,
+                nonpositive_partial_cov_rows=int(n_nonpos_pcov),
+                ranking_min=rank_min, ranking_max=rank_max,
+                ranking_note="original rankings, passed through untouched",
+                intensity_join="peak index (validated m/z)" if peaks is not None else "none")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    ap.add_argument("--raw-dir", default=RAW_DIR)
-    ap.add_argument("--out-dir", default=OUT_DIR)
+    ap.add_argument("--raw-dir", required=True)                      # [DeNovoFFC]
+    ap.add_argument("--out-dir", required=True)                      # [DeNovoFFC]
     ap.add_argument("--only", nargs="+", metavar="NAME",
                     help="convert only these")
     ap.add_argument("--list", action="store_true",

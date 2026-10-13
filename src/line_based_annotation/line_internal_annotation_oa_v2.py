@@ -1696,6 +1696,8 @@ def coverage_table_internal(
     accept_ambiguity: bool = False,
     graph: bool = False,
     graph_path: Optional[str] = None,
+    tffc_analysis_hook=None,                  # [DeNovoFFC]
+    master_set_reconstruction_hook=None,      # [DeNovoFFC]
 ) -> pd.DataFrame:
     """Bond-by-bond coverage table keyed by ``(i, j, shift)`` with explicit
     internal-ion labels.
@@ -2201,7 +2203,11 @@ def coverage_table_internal(
             bond_label = entry[2]
             return bond_label is None or bond_label not in master_rows
 
-        cells, cells_final, (bond_sources, incorrect_coords), _eligible = _tffc_analysis(
+        # [DeNovoFFC] An explicit hook replaces the research tree's habit of
+        # swapping the module-level function (combining_*/_CaptureTffc):
+        # same call, same arguments, no global state touched.
+        _tffc = tffc_analysis_hook or _tffc_analysis       # [DeNovoFFC]
+        cells, cells_final, (bond_sources, incorrect_coords), _eligible = _tffc(
             pep, col_ffcs, col_order, parental_set,
             _is_active, lambda c: inactive_map.get(c) or 0,
             master_align_threshold=master_align_threshold,
@@ -2317,7 +2323,16 @@ def coverage_table_internal(
             if r not in extra_master_bonds
         }
         recon_bonds = set(parental_bonds) | set(bond_sources)
-        n_paths, any_ok, recon_rows = _master_set_reconstruction(
+        # [DeNovoFFC] An explicit replacement for the final search (the opt-in
+        # RBDP annotation route, src/rbdp/annotation_adapter.py).  It receives
+        # the same arguments plus this call's context; None keeps the original.
+        _recon = _master_set_reconstruction
+        if master_set_reconstruction_hook is not None:
+            import functools as _ft
+            _recon = _ft.partial(master_set_reconstruction_hook, context=dict(
+                ffc_df=ffc_df, lines=list(lines), parent_mass=parent_mass,
+                parent_charge=parent_charge, tol_ppm=tol_ppm))
+        n_paths, any_ok, recon_rows = _recon(
             pep, sorted(recon_bonds), [c for c, _k, _s in incorrect_coords],
             edges_path=edges_path,
             threshold=reconstruct_threshold,
@@ -2560,6 +2575,7 @@ def run_internal_annotation(
     accept_ambiguity: bool = False,
     graph: bool = False,
     graph_path: Optional[str] = None,
+    master_set_reconstruction_hook=None,      # [DeNovoFFC]
 ):
     """Run orientation-agnostic ``detect_lines_oa`` + ``coverage_table_internal``.
 
@@ -2627,6 +2643,7 @@ def run_internal_annotation(
         accept_ambiguity=accept_ambiguity,
         graph=graph,
         graph_path=graph_path,
+        master_set_reconstruction_hook=master_set_reconstruction_hook,  # [DeNovoFFC]
     )
     return table, all_lines
 
@@ -2642,10 +2659,7 @@ if __name__ == "__main__":
 
     # ── Configuration (HAD, charge 4 -- matches 4+.xlsx) ───────────────────
     #DATA_PATH = os.path.join(_DEISO, "result", "HAD_merged.tsv")
-    #DATA_PATH = "/home/sux002/data/deconvoluted/LLG_37_Z6_E30_I130_merged.tsv"
-    #DATA_PATH = "/home/sux002/data/deconvoluted/VEA_15_Z3_revised_merged.tsv"
-    #DATA_PATH = "/home/sux002/projects/2D_spec_dict/deiso/python_code/result/YLE_merged.tsv"
-    DATA_PATH = '/home/sux002/data/deconvoluted/merged/KWK_37_Z5_E28_2_XIAOWEN_merged.tsv'
+    DATA_PATH = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "deconvoluted/merged/KWK_37_Z5_E28_2_XIAOWEN_merged.tsv")
     
     #PEP_SEQ = "VEADIAGHGQEVLIR"
     #PEP_SEQ = "LLGDFFRKSKEKIGKEFKRIVQRIKDFLRNLVPRTES"

@@ -1253,11 +1253,12 @@ def deconvolute_ffc_by_lines(
 # =============================================================================
 
 if __name__ == "__main__":
+    import os  # [DeNovoFFC] example data root: $DENOVOFFC_DATA_ROOT
     # Same data layout as your existing scripts.
     DATA_PATH = (
-        "/home/sux002/projects/2D_spec_dict/deiso/data/VEA3+_with_intensity.txt"
+        os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "deiso/data/VEA3+_with_intensity.txt")
     )
-    SAVE_DIR = "/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/deconv/"
+    SAVE_DIR = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "data/long_peptide/deconv/")
 
     PARENT_CHARGE = 3
     #PARENT_MASS = 3767.8441  # neutral precursor mass for HAD4+

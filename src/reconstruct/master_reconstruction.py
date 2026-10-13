@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-master_reconstruction.py -- end-to-end DeNovoMMS reconstruction that combines
+master_reconstruction.py -- end-to-end DeNovoFFC reconstruction that combines
 the *parental*, *neutral-loss* and *internal* lines of a line-annotated FFC map
 into a single **master TFFC-set**, then reads the peptide off the heaviest path
 of the 2D-DAG built on that set.
@@ -196,7 +196,7 @@ NEUTRAL_LOSS_SHIFTS: Dict[str, float] = {"H2O": WATER, "NH3": NH3, "CO": CO}
 MIN_AA_MASS = min(lba.AA.amino_acid_masses[a] for a in "ARNDCEQGHILKMFPSTWYV")
 
 DEFAULT_EDGES = os.path.join(_HERE, "edges.json")
-DEFAULT_DATA = "/home/sux002/data/deconvoluted/merged/KWK_37_Z5_E28_2_XIAOWEN_merged.tsv"
+DEFAULT_DATA = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "deconvoluted/merged/KWK_37_Z5_E28_2_XIAOWEN_merged.tsv")
 DEFAULT_SEQ = "KWKLFKKIEKVGQNIRDGIIKAGPAVAVVGQATQIAK"
 
 #: Line categories this version of the algorithm knows how to align.

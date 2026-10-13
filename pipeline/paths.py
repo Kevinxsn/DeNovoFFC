@@ -24,13 +24,19 @@ DE_NOVO     = os.path.join(SRC, "de_novo")
 ETD         = os.path.join(SRC, "ETD")
 
 for _p in (DEISO, LINE_BASED, THEORETICAL, RECONSTRUCT, DATA_PREP,
-           DECONV, ANNOTATION, DE_NOVO):
+           DECONV, ANNOTATION, DE_NOVO, ETD):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+# The packages written for this repository (``rbdp``, ``combination``,
+# ``gap_scoring``) are imported as packages from ``src/``.  Appended LAST, so a
+# flat vendored module always wins over a directory of the same name.
+if SRC not in sys.path:
+    sys.path.append(SRC)
+
 #: The C++ de novo engine.  Built by ``cpp/build.sh``; absent until then, in
 #: which case the pipeline falls back to the Python reference.
-CPP_ENGINE = os.path.join(ROOT, "bin", "denovo_mms")
+CPP_ENGINE = os.path.join(ROOT, "bin", "denovo_ffc")
 
 #: The compound-residue-mass table the Python reference needs.  The C++ engine
 #: generates its own in ~80 ms and never reads this file (DESIGN.md 6.1).
@@ -57,11 +63,11 @@ def topfd_bin() -> str | None:
     belonging to TopPIC, and pinning a copy here would silently fork someone
     else's release.  Resolution order:
 
-        $DENOVOMMS_TOPFD_BIN  ->  `topfd` on PATH  ->  None
+        $DENOVOFFC_TOPFD_BIN  ->  `topfd` on PATH  ->  None
 
     None is not fatal -- ``--no-topfd`` runs Stage 1 alone.
     """
-    env = os.environ.get("DENOVOMMS_TOPFD_BIN")
+    env = os.environ.get("DENOVOFFC_TOPFD_BIN")
     if env and os.path.isfile(env):
         return env
     return shutil.which("topfd")
@@ -70,10 +76,10 @@ def topfd_bin() -> str | None:
 def topfd_env() -> dict:
     """Extra environment TopFD needs (its TopPIC shared libraries).
 
-    Set ``$DENOVOMMS_TOPFD_LIB`` to the directory holding them; TopFD exits at
+    Set ``$DENOVOFFC_TOPFD_LIB`` to the directory holding them; TopFD exits at
     load time without it.
     """
-    lib = os.environ.get("DENOVOMMS_TOPFD_LIB")
+    lib = os.environ.get("DENOVOFFC_TOPFD_LIB")
     if not lib:
         return {}
     existing = os.environ.get("LD_LIBRARY_PATH", "")

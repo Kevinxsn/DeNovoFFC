@@ -17,7 +17,10 @@
 #include "denovo/ffc.hpp"
 #include "denovo/lines.hpp"
 #include "denovo/masterset.hpp"
+#include "denovo/bigcount.hpp"
 #include "denovo/dag.hpp"
+#include "denovo/reconstruction.hpp"
+#include "denovo/rbdp_types.hpp"
 
 namespace denovo {
 
@@ -51,6 +54,17 @@ struct Params {
     int    max_paths = 1000;
     double label_tol = 0.02;
     int    edges_max_n = 20;
+    //: Multiplies every node sigma AND the precursor sigma of the FINAL graph
+    //: only -- discovery (the rounds) and rendering (merge_tol) are untouched.
+    //: 1.0 is the public default; the research RBDP benchmark used 0.4.
+    double recon_sigma_scale = 1.0;
+    //: "enumeration" (DFS order, the public default) | "informative".
+    std::string presentation_order = "enumeration";
+    //: unit | rbdp | rbdp-guarded  (see rbdp_types.hpp)
+    std::string reconstruction_method = "unit";
+    RbdpSettings rbdp;
+    // identity, carried into evidence ids only
+    std::string dataset_id = "data";
 };
 
 // One member FFC of a line, as two singly-protonated side masses.
@@ -58,6 +72,7 @@ struct Tffc {
     double x = 0, y = 0;
     int ch_x = 1, ch_y = 1;
     int ranking = -1;
+    long row = -1;                     // FfcTable::row of the member FFC
 };
 
 struct LineInfo {
@@ -79,8 +94,20 @@ struct LineInfo {
     int best_rank() const;
 };
 
+// One node of the frozen final graph: a master entry in sorted-coordinate
+// order.  node_id is its position in that order.
+struct FrozenNode {
+    int    node_id = 0;
+    size_t entry = 0;                  // index into Result::master
+    double coord = 0.0;
+    double discovery_sigma = 0.0;      // what the rounds used
+    double graph_sigma = 0.0;          // discovery_sigma * recon_sigma_scale
+    double weight = 1.0;
+};
+
 struct Result {
     double total = 0.0, term = 0.0;
+    size_t n_ffc = 0;                  // rows after the top-N cut
     Basis  basis;
     int    line_charge = 0;
     std::vector<LineInfo> lines;
@@ -94,6 +121,26 @@ struct Result {
     int    rounds = 0;
     double best_weight = -1.0;
     long   dag_builds = 0;
+
+    // ── frozen final graph and v2 artifact fields ──────────────────────────
+    std::vector<FrozenNode> nodes;
+    double precursor_sigma = 0.0;          // discovery
+    double graph_precursor_sigma = 0.0;    // final search (scaled)
+    double merge_tol = 0.0;                // rendering (unscaled)
+    //: aligned with `reconstructions` / `paths_raw` (presentation order)
+    std::vector<StructuredPath> structured;
+    std::vector<std::vector<std::pair<int,int>>> path_node_ids;
+    std::vector<std::vector<std::string>> path_hypotheses;
+    //: exact number of optimal paths of the REPORTED method, from the tie
+    //: DAG -- never from enumeration.  Empty string == unknown (no path).
+    std::string exact_optimal_path_count;
+    bool   enumeration_truncated = false;
+    std::string score_method = "unit";
+    //: digest of everything discovery produced (lines, master set).  Must not
+    //: depend on the reconstruction method or the final-graph sigma scale.
+    std::string discovery_hash;
+    std::string status = "ok";             // ok | no_path | invalid_parity | rbdp statuses
+    RbdpReport rbdp;
 };
 
 Result run_denovo(const FfcTable& t, int parent_charge, double parent_mass,

@@ -1,10 +1,16 @@
 #include "denovo/pipeline.hpp"
 #include "denovo/dag.hpp"
+#include "denovo/optimal_paths.hpp"
+#include "denovo/rbdp.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <limits>
+#include <map>
 #include <set>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -15,25 +21,6 @@ std::string fmt(const char* f, double v) {
     char buf[64];
     snprintf(buf, sizeof buf, f, v);
     return buf;
-}
-
-// ([M+H]+ mass of one FFC side) -> (folded coordinate, sigma).
-//
-// ⚠ Two things happen here and they must not be confused.  The COORDINATE is
-// on the fragmentation's basis (strip the proton, strip side_nh3, fold).
-// SIGMA is referenced to the mass that was actually MEASURED -- never to the
-// folded coordinate and never to the basis-shifted one.  The coordinate may
-// sit tens of Da away (c/z) or on the far side of the peptide (a mirrored
-// side), but the error travels with the measurement.  Mirroring additionally
-// inherits whatever uncertainty the precursor mass carries.
-inline void coord_from_side(double ion_mass, const Basis& b, double tol_ppm,
-                            double precursor_ppm, double& coord, double& sigma) {
-    const double m_meas = ion_mass - PROTON;
-    const double u = m_meas - b.side_nh3;
-    const double sig = std::fabs(m_meas) * tol_ppm * 1e-6;
-    const double ct = b.coord_total();
-    if (u <= ct - u) { coord = u; sigma = sig; }
-    else { coord = ct - u; sigma = sig + b.total * precursor_ppm * 1e-6; }
 }
 
 // The TFFC's two possible placements ("trust Y", then "trust X"), each with
@@ -169,68 +156,6 @@ bool mock_ok(const LineInfo& li, double gate) {
     return li.n_both_known <= gate * static_cast<double>(li.tffcs.size());
 }
 
-// path_finding._merge_close
-std::vector<double> merge_close(std::vector<double> v, double tol) {
-    std::sort(v.begin(), v.end());
-    std::vector<double> out;
-    for (double x : v)
-        if (out.empty() || std::fabs(x - out.back()) > tol) out.push_back(x);
-    return out;
-}
-
-// Gapped N->C reconstruction of one path.  Collapse the b-side and mirrored
-// y-side breakpoints into one ladder, then print each segment as a residue
-// letter or as its mass.  Naming uses the TIGHTER tolerance: with a wide
-// window a measured gap can sit closer to the wrong residue (K and Q are
-// 0.036 Da apart) and a confidently wrong letter is worse than an honest
-// number.  "(sink)" marks the one gap the two ladders never bridged.
-std::string format_gapped(const Path& path, double total, double term,
-                          double merge_tol, double label_tol) {
-    if (path.nodes.empty()) return "";
-    const double m_res = total - term;
-    std::vector<double> all{0.0, m_res};
-    double sink_prev = -1e300, sink_next = 1e300;
-    for (const auto& n : path.nodes) {
-        const double b = n.first;
-        const double y = m_res - (n.second - term);
-        all.push_back(b);
-        all.push_back(y);
-        sink_prev = std::max(sink_prev, b);
-        sink_next = std::min(sink_next, y);
-    }
-    const std::vector<double> bp = merge_close(std::move(all), merge_tol);
-
-    std::vector<std::string> tokens;
-    std::string run;
-    for (size_t k = 0; k + 1 < bp.size(); ++k) {
-        const double prev = bp[k], nxt = bp[k + 1], gap = nxt - prev;
-        const bool is_sink = std::fabs(prev - sink_prev) <= merge_tol &&
-                             std::fabs(nxt  - sink_next) <= merge_tol;
-        // min() keeps the FIRST minimum, so ties follow the table's order.
-        char letter = 0;
-        double best_d = 1e300;
-        for (const Residue& r : residues()) {
-            const double d = std::fabs(r.mass - gap);
-            if (d < best_d) { best_d = d; letter = r.letter; }
-        }
-        if (best_d <= label_tol) {
-            run += letter;
-            if (is_sink) run += "(sink)";
-        } else {
-            if (!run.empty()) { tokens.push_back(run); run.clear(); }
-            tokens.push_back(fmt("%.3f", gap) + (is_sink ? " (sink)" : ""));
-        }
-    }
-    if (!run.empty()) tokens.push_back(run);
-
-    std::string out;
-    for (size_t k = 0; k < tokens.size(); ++k) {
-        if (k) out += " - ";
-        out += tokens[k];
-    }
-    return out;
-}
-
 // Member FFCs of a line, with each one's orientation resolved.  Detection is
 // orientation-agnostic: the line stores a canonical (i, j) and each member's
 // true orientation is whichever of i*mzA+j*mzB / j*mzA+i*mzB lands closer to
@@ -250,9 +175,152 @@ std::vector<Tffc> extract_tffcs(const FfcTable& t, const Line& ln) {
         f.x = ch_a * a - (ch_a - 1) * MASS_H;
         f.y = ch_b * b - (ch_b - 1) * MASS_H;
         f.ranking = t.ranking[r];
+        f.row = t.row.empty() ? static_cast<long>(r) : t.row[r];
         out.push_back(f);
     }
     return out;
+}
+
+// FNV-1a over a canonical text of everything discovery produced.  Used only
+// to prove that the reconstruction method and the final-graph sigma scale do
+// not reach back into discovery; it is not a cryptographic hash.
+std::string discovery_digest(const Result& r) {
+    uint64_t h = 1469598103934665603ULL;
+    auto feed = [&](const std::string& s) {
+        for (unsigned char c : s) { h ^= c; h *= 1099511628211ULL; }
+        h ^= 0xff; h *= 1099511628211ULL;
+    };
+    char buf[64];
+    auto num = [&](double v) { std::snprintf(buf, sizeof buf, "%.17g", v); feed(buf); };
+    for (const LineInfo& li : r.lines) {
+        feed(li.key); feed(li.category); num(li.a_shift); num(li.mass);
+        feed(std::to_string(li.n_ffc()) + "/" + std::to_string(li.n_banked) + "/" +
+             std::to_string(li.eligible));
+    }
+    std::vector<const Entry*> es;
+    for (const Entry& e : r.master) es.push_back(&e);
+    std::sort(es.begin(), es.end(),
+              [](const Entry* a, const Entry* b) { return a->coord < b->coord; });
+    for (const Entry* e : es) { num(e->coord); num(e->sigma); feed(std::to_string(e->n)); }
+    feed(std::to_string(r.rounds));
+    std::snprintf(buf, sizeof buf, "%016llx", static_cast<unsigned long long>(h));
+    return buf;
+}
+
+// Final graph, search, counts, rendering.  Everything here works on the
+// frozen view; `p.recon_sigma_scale` narrows the windows of THIS graph only.
+void finalize(Result& res, const View& v, const Params& p,
+              const std::vector<double>& allowed, long discovery_builds) {
+    const double scale = p.recon_sigma_scale;
+    if (!(scale > 0.0) || !std::isfinite(scale))
+        throw std::invalid_argument("recon_sigma_scale must be a positive finite number");
+
+    double merge_tol = 0.0;                         // rendering: unscaled
+    for (double s : v.sigmas) merge_tol = std::max(merge_tol, s);
+    res.merge_tol = merge_tol * 2.0;
+    res.graph_precursor_sigma = res.precursor_sigma * scale;
+
+    View gv = v;
+    if (scale != 1.0)
+        for (double& s : gv.sigmas) s *= scale;
+
+    // nodes, in sorted-view order (== node_id)
+    std::map<double, std::pair<int, double>> lookup;     // coord -> (id, discovery sigma)
+    for (size_t k = 0; k < v.coords.size(); ++k) {
+        FrozenNode n;
+        n.node_id = static_cast<int>(k);
+        n.coord = v.coords[k];
+        n.discovery_sigma = v.sigmas[k];
+        n.graph_sigma = gv.sigmas[k];
+        n.weight = v.weights[k];
+        for (size_t e = 0; e < res.master.size(); ++e)
+            if (res.master[e].coord == n.coord) { n.entry = e; break; }
+        res.nodes.push_back(n);
+        lookup.emplace(n.coord, std::make_pair(n.node_id, n.discovery_sigma));
+    }
+
+    const Dag dag = build_dag(gv.coords, gv.sigmas, allowed, res.total, 0.0, res.term,
+                              res.graph_precursor_sigma);
+    res.dag_builds = discovery_builds + 1;
+    const std::vector<double> w = weights_on(dag, gv);
+
+    // The unit control.  `heaviest_paths` is the search the parity suite
+    // guards; the tie DAG re-derives its optimum and gives the exact count.
+    std::vector<Path> raw;
+    const double best = heaviest_paths(dag, w, p.max_paths, raw);
+    const TieDag control = tie_dag(dag, Coloring::uniform(w), MaskMode::Hard, 1e-9);
+    const bool feasible = (best != -std::numeric_limits<double>::infinity());
+    if (feasible != control.feasible() ||
+        (feasible && std::fabs(best - control.optimum()) > 1e-9)) {
+        res.status = "invalid_parity";
+        res.rbdp.notes.push_back("tie-DAG optimum disagrees with heaviest_paths");
+    }
+    res.best_weight = feasible ? best : -1.0;
+    BigCount exact = control.n_optimal();
+    std::vector<std::vector<std::string>> hyps(raw.size());
+
+    std::vector<int> dag_to_node(dag.coords.size(), -1);
+    for (size_t k = 0; k < dag.coords.size(); ++k) {
+        auto it = lookup.find(dag.coords[k]);
+        if (it != lookup.end()) dag_to_node[k] = it->second.first;
+    }
+
+    if (p.reconstruction_method != "unit") {
+        RbdpOutcome o = run_rbdp(res, dag, w, control, p, dag_to_node);
+        if (o.replace_paths) {
+            raw.clear();
+            for (const auto& ids : o.paths) raw.push_back(to_path(dag, ids));
+            hyps = o.hypotheses;
+            exact = o.exact;
+            res.best_weight = o.optimum;
+            res.score_method = o.score_method;
+        } else if (o.withhold_paths) {
+            raw.clear();
+            hyps.clear();
+            exact = BigCount();
+            res.best_weight = -1.0;
+            res.score_method = o.score_method;
+        }
+    }
+
+    // Render, then order for presentation.
+    std::vector<StructuredPath> sp;
+    std::vector<std::string> texts;
+    std::vector<GappedStats> stats;
+    const NodeLookup look = [&](double c, int& id, double& s) {
+        auto it = lookup.find(c);
+        if (it == lookup.end()) { id = -1; s = 0.0; return; }
+        id = it->second.first; s = it->second.second;
+    };
+    for (const Path& pth : raw) {
+        sp.push_back(structure_path(pth, res.total, res.term, res.merge_tol,
+                                    p.label_tol, res.precursor_sigma, look));
+        texts.push_back(sp.back().text);
+        stats.push_back(sp.back().stats);
+    }
+    const std::vector<size_t> order = presentation_order(raw, texts, stats,
+                                                         p.presentation_order);
+    res.reconstructions.clear();
+    res.paths_raw.clear();
+    for (size_t k : order) {
+        res.reconstructions.push_back(texts[k]);
+        res.paths_raw.push_back(raw[k]);
+        res.structured.push_back(sp[k]);
+        res.path_hypotheses.push_back(k < hyps.size() ? hyps[k]
+                                                      : std::vector<std::string>{});
+        std::vector<std::pair<int,int>> ids;
+        for (const auto& n : raw[k].nodes) {
+            int a = -1, b = -1; double s;
+            look(n.first, a, s);
+            look(n.second, b, s);
+            ids.emplace_back(a, b);
+        }
+        res.path_node_ids.push_back(ids);
+    }
+    res.n_paths = static_cast<int>(res.reconstructions.size());
+    res.exact_optimal_path_count = (res.best_weight < 0 && raw.empty()) ? "0" : exact.str();
+    res.enumeration_truncated = BigCount(static_cast<uint64_t>(res.n_paths)) < exact;
+    if (res.status == "ok" && raw.empty()) res.status = "no_path";
 }
 
 }  // namespace
@@ -274,6 +342,7 @@ Result run_denovo(const FfcTable& t, int parent_charge, double parent_mass,
     const double precursor_sigma = basis.total * p.precursor_ppm * 1e-6;
 
     Result res;
+    res.n_ffc = t.size();
     res.basis = basis;
     res.total = total;
     res.term  = term;
@@ -336,12 +405,14 @@ Result run_denovo(const FfcTable& t, int parent_charge, double parent_mass,
                                                  : std::max<double>(t.size(), 1.0);
     MasterSet master(total, p.sigma_floor_ppm, p.mock_weight, p.evidence_weight,
                      p.evidence_cap, p.rank_floor, rank_scale);
-    for (const LineInfo& li : res.lines) {
+    for (size_t q = 0; q < res.lines.size(); ++q) {
+        const LineInfo& li = res.lines[q];
         if (li.category != "parental") continue;
+        const int lid = static_cast<int>(q);
         for (const Tffc& f : li.tffcs) {
             const Images im = images_of(f, basis, p.tol_ppm, p.precursor_ppm);
-            master.add(im.hc, im.hs, "parental", li.key, f.ranking);
-            master.add(im.vc, im.vs, "parental", li.key, f.ranking);
+            master.add(im.hc, im.hs, "parental", li.key, f.ranking, lid);
+            master.add(im.vc, im.vs, "parental", li.key, f.ranking, lid);
         }
     }
 
@@ -458,13 +529,14 @@ Result run_denovo(const FfcTable& t, int parent_charge, double parent_mass,
         if (picks.empty() && new_mocks.empty()) { rounds_used = r; break; }
 
         for (const Pick& m : new_mocks) {
-            work.add(m.c, m.s, "mock", m.key, m.rank);
+            work.add(m.c, m.s, "mock", m.key, m.rank, static_cast<int>(by_key[m.key]));
             res.lines[by_key[m.key]].n_banked += 1;
         }
         // Bank first, then erase -- erasing invalidates the recorded indices.
         std::unordered_map<std::string, std::vector<size_t>> erase_at;
         for (const Pick& pk : picks) {
-            work.add(pk.c, pk.s, "unambiguous", pk.key, pk.rank);
+            work.add(pk.c, pk.s, "unambiguous", pk.key, pk.rank,
+                     static_cast<int>(by_key[pk.key]));
             LineInfo& li = res.lines[by_key[pk.key]];
             li.n_unambiguous += 1;
             li.n_banked += 1;
@@ -497,15 +569,17 @@ Result run_denovo(const FfcTable& t, int parent_charge, double parent_mass,
                     // An ambiguous TFFC's evidence is "one of these two", never
                     // "this one", so the pair is atomic: both or neither.
                     if (li.eligible && p.accept_ambiguity) {
-                        work.add(im.hc, im.hs, "ambiguous", k, f.ranking);
-                        work.add(im.vc, im.vs, "ambiguous", k, f.ranking);
+                        const int lid = static_cast<int>(by_key[k]);
+                        work.add(im.hc, im.hs, "ambiguous", k, f.ranking, lid);
+                        work.add(im.vc, im.vs, "ambiguous", k, f.ranking, lid);
                         li.n_banked += 2;
                     }
                 } else if (good_h || good_v) {
                     li.n_unambiguous += 1;
                     if (li.eligible) {
                         work.add(good_h ? im.hc : im.vc, good_h ? im.hs : im.vs,
-                                 "unambiguous", k, f.ranking);
+                                 "unambiguous", k, f.ranking,
+                                 static_cast<int>(by_key[k]));
                         li.n_banked += 1;
                     }
                 } else {
@@ -515,25 +589,14 @@ Result run_denovo(const FfcTable& t, int parent_charge, double parent_mass,
         }
     }
 
-    // ── 6. Reconstruct from the whole master TFFC-set ─────────────────────
-    const View v = work.view();
-    std::vector<Path> raw;
-    const double best = scorer.paths(v, raw);
-    if (best != -std::numeric_limits<double>::infinity()) {
-        double merge_tol = 0.0;
-        for (double s : v.sigmas) merge_tol = std::max(merge_tol, s);
-        merge_tol *= 2.0;
-        for (const Path& pth : raw)
-            res.reconstructions.push_back(
-                format_gapped(pth, total, term, merge_tol, p.label_tol));
-        res.paths_raw = raw;
-    }
-
+    // ── 6. Freeze discovery, then reconstruct on the final graph ──────────
+    // Discovery is finished here: nothing below may add or remove a master
+    // entry, so `unit` and `rbdp` (and any sigma scale) compare on one set.
     res.master = work.entries();
-    res.n_paths = static_cast<int>(res.reconstructions.size());
     res.rounds = rounds_used;
-    res.best_weight = (best == -std::numeric_limits<double>::infinity()) ? -1.0 : best;
-    res.dag_builds = scorer.builds();
+    res.precursor_sigma = precursor_sigma;
+    res.discovery_hash = discovery_digest(res);
+    finalize(res, work.view(), p, allowed, scorer.builds());
     return res;
 }
 

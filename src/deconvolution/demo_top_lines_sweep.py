@@ -83,7 +83,7 @@ MAIN = [
     ("YPS6+", "YPS_36_Z6_E25_I300"),
 ]
 
-DATA_DIR = "/home/sux002/data/mms_with_intensity"
+DATA_DIR = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "mms_with_intensity")
 TOP_LINES_GRID = [2000, 5000, 10000, 15000]
 TOP_SELECTED = 15000
 
@@ -160,7 +160,7 @@ def main(argv=None) -> int:
                     help="run only these Main entries (e.g. VEA3+ HAD4+)")
     ap.add_argument("--top-lines", nargs="+", type=int, default=TOP_LINES_GRID)
     ap.add_argument("--out-root",
-                    default="/home/sux002/data/deconvoluted_new/demo_top_lines")
+                    default=os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "deconvoluted_new/demo_top_lines"))
     ap.add_argument("--out", help="also write the summary table here (.csv)")
     args = ap.parse_args(argv)
 

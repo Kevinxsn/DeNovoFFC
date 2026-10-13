@@ -2,7 +2,7 @@
 
 Companion to run_annotation.py, for raw MMS tables that carry no
 deconvolution output at all -- i.e. no 'charge_A'/'charge_B' columns
-(e.g. /home/sux002/data/mms_with_intensity/VEA_15_Z3_revised). Charge is
+(e.g. $DENOVOFFC_DATA_ROOT/mms_with_intensity/VEA_15_Z3_revised). Charge is
 never read from the input and never constrains matching; every charge
 reported comes from the theoretical ion that was matched.
 
@@ -21,10 +21,10 @@ in this charge-free mode a fallback side was never verified as part of a
 compatible pair, so its charge rests entirely on the single-m/z match.
 
 Usage:
-    PY=/home/sux002/miniforge3/envs/2d_spec/bin/python
+    PY=python
     $PY -c "from run_nocharge_annotation import run_nocharge_annotation; \
       run_nocharge_annotation( \
-        '/home/sux002/data/mms_with_intensity/VEA_15_Z3_revised', \
+        '$DENOVOFFC_DATA_ROOT/mms_with_intensity/VEA_15_Z3_revised', \
         'VEADIAGHGQEVLIR', 3, top_n=50)"
 """
 

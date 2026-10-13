@@ -40,7 +40,7 @@ const Entry* MasterSet::find(double coord, double sigma) const {
 }
 
 bool MasterSet::add(double coord, double sigma, const std::string& kind,
-                    const std::string& origin, int rank) {
+                    const std::string& origin, int rank, int origin_line) {
     const double c = fold(coord, total_);
     if (c <= sigma || c >= total_ - sigma) return false;   // a terminus
 
@@ -69,6 +69,7 @@ bool MasterSet::add(double coord, double sigma, const std::string& kind,
         if (rank >= 0 && (hit->best_rank < 0 || rank < hit->best_rank))
             hit->best_rank = rank;
         if (!origin.empty()) hit->origins.push_back(origin);
+        if (origin_line >= 0) hit->origin_lines.push_back(origin_line);
         return false;
     }
 
@@ -80,6 +81,7 @@ bool MasterSet::add(double coord, double sigma, const std::string& kind,
     e.best_rank = rank;
     e.kinds.push_back(kind);
     if (!origin.empty()) e.origins.push_back(origin);
+    if (origin_line >= 0) e.origin_lines.push_back(origin_line);
     entries_.push_back(std::move(e));
     return true;
 }

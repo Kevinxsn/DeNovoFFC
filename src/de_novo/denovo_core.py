@@ -180,8 +180,19 @@ class Basis:
         so ``detect_lines_oa``'s parental pass misses it and greedy peeling finds
         it instead -- splitting its evidence across its own isotope satellites,
         which carry more members than the monoisotopic line.  Nothing errors.
+
+        [DeNovoFFC] A complementary pair is two detected fragments, each with
+        at least one charge, so the budget must be >= 2 (b/y: z >= 2, c/z:
+        z >= 3).  The original clamped an impossible budget up to 2 silently;
+        that is now an input error, matching the C++ engine.
         """
-        return max(parent_charge + self.charge_offset, 2)
+        z = parent_charge + self.charge_offset
+        if z < 2:                                                # [DeNovoFFC]
+            raise ValueError(
+                f"precursor charge {parent_charge} leaves a {self.mode} ladder "
+                f"charge budget of {z}; a complementary pair needs >= 2 "
+                f"(b/y: z >= 2, c/z: z >= 3)")
+        return z
 
 
 #: ``fragmentation`` -> the chemistry.  ``HCD`` is the default everywhere.
@@ -538,6 +549,9 @@ class Tffc:
     ch_x: int
     ch_y: int
     ranking: int = -1
+    #: [DeNovoFFC] the member FFC's index label in the input frame -- its
+    #: stable identity for evidence export (ranks are reset by the merge).
+    row: object = field(default=None, compare=False)
 
     def images(self, basis: "Basis", tol_ppm: float, precursor_ppm: float):
         """The TFFC's two possible placements, each with its own sigma.
@@ -637,7 +651,8 @@ def extract_tffcs(ffc_df: pd.DataFrame, line, col_a: str, col_b: str,
         x = ch_a * mz_a - (ch_a - 1) * MASS_H
         y = ch_b * mz_b - (ch_b - 1) * MASS_H
         rank = int(row[ranking_col]) if ranking_col in sub.columns else -1
-        out.append(Tffc(x=x, y=y, ch_x=ch_a, ch_y=ch_b, ranking=rank))
+        out.append(Tffc(x=x, y=y, ch_x=ch_a, ch_y=ch_b, ranking=rank,
+                        row=k))                                  # [DeNovoFFC]
     return out
 
 
@@ -727,6 +742,15 @@ class DenovoResult:
     best_weight: float
     paths_raw: list = field(default_factory=list)
     params: dict = field(default_factory=dict)
+    # [DeNovoFFC] the frozen final graph, for the v2 artifact and RBDP:
+    # ``final_view`` is the UNSCALED ``(coords, sigma, weights)`` view of the
+    # converged master set; the final search used sigma * recon_sigma_scale.
+    final_view: tuple = None
+    precursor_sigma: float = 0.0
+    graph_precursor_sigma: float = 0.0
+    merge_tol: float = 0.0
+    #: per reconstruction, ``(resolved, longest_run, gaps)``
+    path_stats: list = field(default_factory=list)
 
 
 def run_denovo(
@@ -763,6 +787,8 @@ def run_denovo(
     max_rounds: int = 20,
     # ── reconstruction ──────────────────────────────────────────────────────
     max_paths: int = 1000,
+    recon_sigma_scale: float = 1.0,                              # [DeNovoFFC]
+    presentation_order: str = "enumeration",                     # [DeNovoFFC]
     label_tol: float = 0.02,
     edges_path: Optional[str] = None,
     col_a: str = "m/z A",
@@ -836,6 +862,17 @@ def run_denovo(
         lengthens the heaviest path.  ``_oa_v2`` could ask whether ``fold(A)``
         lands on a real cleavage; we cannot, so we ask whether it *behaves* like
         one.
+    recon_sigma_scale
+        [DeNovoFFC] Multiplies every node sigma and the precursor sigma of the
+        FINAL search graph only.  Discovery (the rounds) and rendering
+        (``merge_tol``) are untouched.  1.0 keeps the original behaviour; the
+        research RBDP benchmark used 0.4.
+    presentation_order
+        [DeNovoFFC] ``"enumeration"`` keeps the search's DFS order (the
+        original behaviour).  ``"informative"`` orders tied paths by residues
+        named, then longest named run, then fewest gaps, then text -- the
+        research reference's presentation order.  Neither is a claim that the
+        first path is correct.
     """
     from master_reconstruction import classify_line, mark_isotope_satellites
     from master_reconstruction import LineRec as _LineRec
@@ -845,6 +882,10 @@ def run_denovo(
 
     if edges_path is None:
         edges_path = DEFAULT_EDGES_PATH
+    if not (recon_sigma_scale > 0 and np.isfinite(recon_sigma_scale)):  # [DeNovoFFC]
+        raise ValueError("recon_sigma_scale must be a positive finite number")
+    if presentation_order not in ("enumeration", "informative"):         # [DeNovoFFC]
+        raise ValueError("presentation_order must be 'enumeration' or 'informative'")
 
     basis = make_basis(fragmentation, parent_mass, terminus)
     # Everything downstream works on the COORDINATE basis; only `parent_pair`
@@ -1055,24 +1096,43 @@ def run_denovo(
     log(f"  master set after {rounds_used} rounds: {len(work)} breakpoints")
 
     # ── 6. Reconstruct from the whole master TFFC-set ───────────────────────
+    # [DeNovoFFC] The final search may use a tighter window than discovery
+    # did (recon_sigma_scale); rendering always uses the unscaled sigmas.
     coords, sigma, weights = work.view()
+    merge_tol = max(list(sigma.values()) + [0.0]) * 2.0      # rendering: unscaled
+    final_view = (list(coords), dict(sigma), dict(weights))
+    graph_precursor_sigma = precursor_sigma * recon_sigma_scale
+    if recon_sigma_scale != 1.0:
+        sigma = {c: s * recon_sigma_scale for c, s in sigma.items()}
+        scorer = Scorer(allowed, total, source, sink, graph_precursor_sigma,
+                        max_paths)
     best, raw_paths = scorer.paths(coords, sigma, weights)
     rows: List[dict] = []
+    ranked_paths: List[list] = []
+    stats: List[tuple] = []
     if best != float("-inf"):
-        merge_tol = max(list(sigma.values()) + [0.0]) * 2.0
-        for n, (_masses, node_seq) in enumerate(raw_paths, start=1):
+        scored = []
+        for _masses, node_seq in raw_paths:
             stripped = node_seq[:-1]              # drop the Sink sentinel
-            rows.append({
-                "#": n,
-                "reconstruction": _format_gapped(stripped, total, term,
-                                                 merge_tol, label_tol),
-            })
+            text, resolved, longest, gaps = _format_gapped_counts(
+                stripped, total, term, merge_tol, label_tol)
+            scored.append((-resolved, -longest, gaps, text, stripped,
+                           resolved, longest))
+        if presentation_order == "informative":
+            scored.sort()                         # `text` breaks ties
+        for n, item in enumerate(scored, start=1):
+            rows.append({"#": n, "reconstruction": item[3]})
+            ranked_paths.append(item[4])
+            stats.append((item[5], item[6], item[2]))
 
     return DenovoResult(
         total=total, term=term, basis=basis, lines=lines, master=work,
         reconstructions=rows, n_paths=len(rows), rounds=rounds_used,
         best_weight=(-1.0 if best == float("-inf") else best),
-        paths_raw=[p[1][:-1] for p in raw_paths],
+        paths_raw=ranked_paths,
+        final_view=final_view, precursor_sigma=precursor_sigma,
+        graph_precursor_sigma=graph_precursor_sigma, merge_tol=merge_tol,
+        path_stats=stats,
         params=dict(delta=delta, delta_unit=delta_unit,
                     min_ffc_number=min_ffc_number, tol_ppm=tol_ppm,
                     precursor_ppm=precursor_ppm,
@@ -1081,6 +1141,9 @@ def run_denovo(
                     master_align_threshold=master_align_threshold,
                     accept_ambiguity=accept_ambiguity, use_mocks=use_mocks,
                     mock_min_ffc=mock_min_ffc, mock_weight=mock_weight,
+                    recon_sigma_scale=recon_sigma_scale,         # [DeNovoFFC]
+                    presentation_order=presentation_order,       # [DeNovoFFC]
+                    max_paths=max_paths, label_tol=label_tol,    # [DeNovoFFC]
                     include_isotope_lines=include_isotope_lines,
                     secondary_gate=secondary_gate,
                     evidence_weight=evidence_weight, rank_floor=rank_floor,
@@ -1098,7 +1161,17 @@ class _Observed:
 
 def _format_gapped(path, total: float, term: float, merge_tol: float,
                    label_tol: float) -> str:
-    """Gapped N->C reconstruction of one path.
+    """Gapped N->C reconstruction of one path (the string only).
+
+    [DeNovoFFC] A thin wrapper so existing callers keep a ``str``; the counts
+    the presentation order needs come from :func:`_format_gapped_counts`.
+    """
+    return _format_gapped_counts(path, total, term, merge_tol, label_tol)[0]
+
+
+def _format_gapped_counts(path, total: float, term: float, merge_tol: float,
+                          label_tol: float):
+    """Gapped N->C reconstruction of one path, with its informativeness.
 
     Same rendering as ``master_reconstruction.format_gapped``: collapse the
     b-side and mirrored y-side breakpoints into one ladder, then print each
@@ -1107,10 +1180,13 @@ def _format_gapped(path, total: float, term: float, merge_tol: float,
     residue (K and Q are 0.036 Da apart), and a confidently wrong letter is
     worse than an honest number.  ``(sink)`` marks the one gap the two ladders
     never bridged.
+
+    Returns ``(text, resolved, longest_run, gaps)``.  [DeNovoFFC] ported from
+    the research reference, where ``_format_gapped`` itself returned the tuple.
     """
     import path_finding as pf
     if not path:
-        return ""
+        return "", 0, 0, 0
     aa = pf.amino_acid_masses_merge
     m_res = total - term
     b_side = [x1 for x1, _ in path]
@@ -1119,6 +1195,7 @@ def _format_gapped(path, total: float, term: float, merge_tol: float,
     breakpoints = pf._merge_close([0.0, m_res] + b_side + y_side, merge_tol)
 
     tokens, run = [], ""
+    resolved = longest = gaps = 0
     for prev, nxt in zip(breakpoints[:-1], breakpoints[1:]):
         gap = nxt - prev
         is_sink = (abs(prev - sink_prev) <= merge_tol
@@ -1127,11 +1204,14 @@ def _format_gapped(path, total: float, term: float, merge_tol: float,
         letter = best[0] if abs(best[1] - gap) <= label_tol else None
         if letter:
             run += f"{letter}(sink)" if is_sink else letter
+            resolved += 1
+            longest = max(longest, len(run.replace("(sink)", "")))
         else:
             if run:
                 tokens.append(run)
                 run = ""
             tokens.append(f"{gap:.3f}" + (" (sink)" if is_sink else ""))
+            gaps += 1
     if run:
         tokens.append(run)
-    return " - ".join(tokens)
+    return " - ".join(tokens), resolved, longest, gaps

@@ -1146,26 +1146,13 @@ if __name__ == "__main__":
     
     '''
     data_path = (
-        "/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/"
-        "Covariances_Neuropeptide_ChargeStates/"
-        "Covariance_Data.Neuropeptide_z7_611_dm2_NCE25"
+        os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "data/long_peptide/"
+                     "Covariances_Neuropeptide_ChargeStates/"
+                     "Covariance_Data.Neuropeptide_z7_611_dm2_NCE25")
     )
     '''
     
-    #data_path = "/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/CovarianceData.NeuropeptideY_Z6_NCE25_300_ions"
-    #data_path = "/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/HAD4+_with_intensity"
-    #data_path = "/Users/kevinmbp/Desktop/2D_spec_dict/data/short_peptide/HGT3+.txt"
-    #data_path = "/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/deconv/HAD4_ffc_replaced.txt"
-    #data_path = "/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/deconv/HAD4+intensity_replaced.txt"
-    #data_path = "/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/deconv/james_result/Covariances_Deisotoped_V1/Covariance_Data_LL37-Z6_NCE33_250_ions_Deisotoped_FFC_Sum_Top1000"
-    #data_path = "/Users/kevinmbp/Desktop/2D_spec_dict/data/short_peptide/deconv/VEA3_ffc_replaced.txt"
-    #data_path = "/Users/kevinmbp/Desktop/2D_spec_dict/data/short_peptide/deconv/VEA3_ffc_loss_replaced.txt"
-    #data_path = "/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/deconv/KWK6+NCE20_ffc_loss_replaced.txt"
-    #data_path = '/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/CovarianceData.NeuropeptideY_Z6_NCE25_300_ions'
-    #data_path = "/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/CovarianceData.LL37_Z6_NCE33_150_ions"
-    #data_path = "/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/deconv/KWK6+NCE20_combine_replaced_test.txt"
-    #data_path = "/home/sux002/projects/2D_spec_dict/deiso/python_code/result/KWK6_merged.tsv"
-    data_path = "/home/sux002/projects/2D_spec_dict/deiso/python_code/result/LLG_merged.tsv"
+    data_path = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "deiso/python_code/result/LLG_merged.tsv")
     
     df = pd.read_csv(data_path, sep=r"\s+", skiprows=1, header=None, engine="python")
     

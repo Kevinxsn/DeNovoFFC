@@ -13,8 +13,8 @@ run_annotation_reconstruct.py`` uses to discover its inputs, applied one step
 earlier in the chain.  Names that ``peptide_info`` cannot resolve are reported
 and skipped, never guessed at.
 
-Input   /home/sux002/data/mms_with_intensity/<NAME>
-Output  /home/sux002/data/deconvoluted_new/
+Input   $DENOVOFFC_DATA_ROOT/mms_with_intensity/<NAME>
+Output  $DENOVOFFC_DATA_ROOT/deconvoluted_new/
             merge/<NAME>_merged.tsv          <- the deliverable
             intermediate/<NAME>/...          <- per-stage tables, TopFD workdir
             log/<NAME>_log.txt               <- full console output
@@ -48,8 +48,8 @@ from peptide_info import resolve as resolve_name  # noqa: E402
 from deconv_pipeline_oa import run_deconvolution  # noqa: E402
 
 
-DATA_DIR = "/home/sux002/data/mms_with_intensity"
-OUTPUT_DIR = "/home/sux002/data/deconvoluted_new"
+DATA_DIR = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "mms_with_intensity")
+OUTPUT_DIR = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "deconvoluted_new")
 LOG_SUBDIR = "log"
 
 

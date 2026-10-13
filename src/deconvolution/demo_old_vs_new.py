@@ -6,8 +6,8 @@ Scores already-written merged tables -- it deconvolves nothing, so it is
 seconds, not hours. Both sides go through the identical charge-aware
 spurious-parental test, so the comparison is like for like.
 
-    old   /home/sux002/data/deconvoluted/merged/     (greedy lines, doubled frame)
-    new   /home/sux002/data/deconvoluted_new/merge/  (orientation-agnostic lines)
+    old   $DENOVOFFC_DATA_ROOT/deconvoluted/merged/     (greedy lines, doubled frame)
+    new   $DENOVOFFC_DATA_ROOT/deconvoluted_new/merge/  (orientation-agnostic lines)
 
 ``breakpoints`` -- distinct backbone bonds recovered -- is the column that
 matters. ``pairs``/``annot`` can rise simply because a table is bigger; the bond
@@ -42,8 +42,8 @@ from spurious_parental_charge import (  # noqa: E402
 )
 from merge_ffcs import merge_duplicate_ffcs_charge  # noqa: E402
 
-OLD_DIR = "/home/sux002/data/deconvoluted/merged"
-NEW_DIR = "/home/sux002/data/deconvoluted_new/merge"
+OLD_DIR = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "deconvoluted/merged")
+NEW_DIR = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "deconvoluted_new/merge")
 
 #: (label, raw dataset name, old-pipeline filename).  The old tree's names are
 #: inconsistent -- some carry the _XIAOWEN infix, some are hand-named -- which is

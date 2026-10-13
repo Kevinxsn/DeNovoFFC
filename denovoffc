@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# DeNovoMMS entry point.
+# DeNovoFFC entry point.
 #
-# Uses $DENOVOMMS_PYTHON if set, else the first interpreter that can import
+# Uses $DENOVOFFC_PYTHON if set, else the first interpreter that can import
 # pandas.  The pipeline needs numpy / pandas / scipy / openpyxl.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 pick_python() {
-  if [[ -n "${DENOVOMMS_PYTHON:-}" ]]; then echo "$DENOVOMMS_PYTHON"; return; fi
+  if [[ -n "${DENOVOFFC_PYTHON:-}" ]]; then echo "$DENOVOFFC_PYTHON"; return; fi
   for p in python3 python; do
     if command -v "$p" >/dev/null 2>&1 && "$p" -c "import pandas" 2>/dev/null; then
       command -v "$p"; return
     fi
   done
-  echo "denovomms: no Python with pandas found. Set \$DENOVOMMS_PYTHON." >&2
+  echo "denovoffc: no Python with pandas found. Set \$DENOVOFFC_PYTHON." >&2
   exit 1
 }
 

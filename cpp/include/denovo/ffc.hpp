@@ -14,6 +14,10 @@ namespace denovo {
 struct FfcTable {
     std::vector<double> mz_a, mz_b;
     std::vector<int>    ranking;      // -1 == unranked
+    //: 0-based data-row index in the table the engine READ (blank lines not
+    //: counted, matching pandas).  The stable FFC identity: ranks are reset by
+    //: the merge, and the top-N cut reorders rows.
+    std::vector<long>   row;
     size_t size() const { return mz_a.size(); }
 };
 

@@ -450,21 +450,7 @@ if __name__ == "__main__":
     from merge_ffcs import merge_duplicate_ffcs
 
     # ── Configuration ─────────────────────────────────────────────────────
-    #DATA_PATH   = "/Users/kevinmbp/Desktop/2D_spec_dict/pepline/result/VEA_merged.tsv"
-    #DATA_PATH = "/Users/kevinmbp/Desktop/2D_spec_dict/data/short_peptide/VEA3+.txt"
-    #DATA_PATH = "/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/KWK6+NCE20_with_intensity"
-    #DATA_PATH = "/Users/kevinmbp/Desktop/2D_spec_dict/data/short_peptide/YLE3+.txt"
-    #DATA_PATH = "/Users/kevinmbp/Desktop/2D_spec_dict/data/short_peptide/HGT3+.txt"
-    #DATA_PATH = "/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/CovarianceData.NeuropeptideY_Z6_NCE25_300_ions"
-    #DATA_PATH = "/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/CovarianceData.GLP2_Z4_NCE15_200_ions"
-    #DATA_PATH = "/Users/kevinmbp/Desktop/2D_spec_dict/data/deiso/merge/KWK5_merged.tsv"
-    #DATA_PATH = "/Users/kevinmbp/Desktop/2D_spec_dict/data/deiso/merge/KWK6_merged.tsv"
-    #DATA_PATH = "/Users/kevinmbp/Desktop/2D_spec_dict/data/deiso/merge/HAD_merged.tsv"
-    #DATA_PATH = "/Users/kevinmbp/Desktop/2D_spec_dict/data/deiso/merge/YPS6_merged.tsv"
-    #DATA_PATH = "/Users/kevinmbp/Desktop/2D_spec_dict/data/deiso/merge/LLG6_merged.tsv"
-    #DATA_PATH = "/Users/kevinmbp/Desktop/2D_spec_dict/data/long_peptide/deconv/LLG6+_combine_replaced.txt"
-    #DATA_PATH = '/home/sux002/data/mms_with_intensity/VEA_15_Z3'
-    DATA_PATH = '/home/sux002/data/deconvoluted/merged/HAD_33_Z4_E16_XIAOWEN_merged.tsv'
+    DATA_PATH = os.path.join(os.environ.get("DENOVOFFC_DATA_ROOT", "data"), "deconvoluted/merged/HAD_33_Z4_E16_XIAOWEN_merged.tsv")
     
     
     #PEP_SEQ = "KWKLFKKIEKVGQNIRDGIIKAGPAVAVVGQATQIAK"
